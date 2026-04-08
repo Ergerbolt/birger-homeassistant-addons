@@ -1,6 +1,6 @@
 {
   "name": "WNT/Deye Block Monitor over Modbus TCP",
-  "version": "1.1.10",
+  "version": "1.1.11",
   "slug": "dalybms_waveshare",
   "description": "Reads a fixed WNT/Deye Modbus TCP block and publishes candidate values to MQTT",
   "startup": "application",
@@ -16,6 +16,7 @@
     "device": "10.0.0.135",
     "device_id": "WNT-BMS",
     "cells_in_series": 16,
+    "nominal_capacity_ah": 0,
     "poll_interval_seconds": 10,
     "modbus_port": 502,
     "modbus_unit_id": 81,
@@ -32,6 +33,7 @@
     "device": "str",
     "device_id": "str",
     "cells_in_series": "int(1,32)",
+    "nominal_capacity_ah": "float",
     "poll_interval_seconds": "int(1,300)",
     "modbus_port": "int(1,65535)",
     "modbus_unit_id": "int(0,255)",

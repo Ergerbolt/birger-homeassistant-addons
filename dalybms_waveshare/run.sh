@@ -3,6 +3,7 @@
 export DEVICE=$(bashio::config 'device')
 export DEVICE_ID=$(bashio::config 'device_id')
 export CELL_COUNT=$(bashio::config 'cells_in_series')
+export NOMINAL_CAPACITY_AH=$(bashio::config 'nominal_capacity_ah')
 export MQTT_SERVER=$(bashio::config 'mqtt_server')
 export MQTT_USER=$(bashio::config 'mqtt_user')
 export MQTT_PASS=$(bashio::config 'mqtt_pass')
@@ -19,6 +20,7 @@ echo "=== WNT/Deye Modbus add-on starting ==="
 echo "DEVICE=$DEVICE"
 echo "DEVICE_ID=$DEVICE_ID"
 echo "CELL_COUNT=$CELL_COUNT"
+echo "NOMINAL_CAPACITY_AH=$NOMINAL_CAPACITY_AH"
 echo "MQTT_SERVER=$MQTT_SERVER"
 echo "MQTT_CLIENT_ID=$MQTT_CLIENT_ID"
 echo "MQTT_DISCOVERY_PREFIX=$MQTT_DISCOVERY_PREFIX"

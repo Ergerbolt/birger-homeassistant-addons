@@ -37,6 +37,7 @@ MQTT_USER = os.environ["MQTT_USER"]
 MQTT_PASS = os.environ["MQTT_PASS"]
 MQTT_CLIENT_ID = os.environ["MQTT_CLIENT_ID"]
 MQTT_DISCOVERY_PREFIX = os.environ["MQTT_DISCOVERY_PREFIX"]
+NOMINAL_CAPACITY_AH = float(os.environ.get("NOMINAL_CAPACITY_AH", "0"))
 
 MODBUS_PORT = int(os.environ.get("MODBUS_PORT", "502"))
 MODBUS_UNIT_ID = int(os.environ.get("MODBUS_UNIT_ID", "81"))
@@ -85,6 +86,7 @@ log.info("POLL_INTERVAL_SECONDS=%s", POLL_INTERVAL_SECONDS)
 log.info("MQTT_SERVER=%s", MQTT_SERVER)
 log.info("MQTT_CLIENT_ID=%s", MQTT_CLIENT_ID)
 log.info("MQTT_DISCOVERY_PREFIX=%s", MQTT_DISCOVERY_PREFIX)
+log.info("NOMINAL_CAPACITY_AH=%s", NOMINAL_CAPACITY_AH)
 log.info("MODBUS_PORT=%s", MODBUS_PORT)
 log.info("MODBUS_UNIT_ID=%s", MODBUS_UNIT_ID)
 log.info("MODBUS_START=%s", MODBUS_START)
@@ -142,49 +144,118 @@ def publish_discovery():
     discovery = {
         f"{STATE_TOPIC}_soc/config": {
             "device_class": "battery",
-            "name": "Battery SOC Candidate",
+            "name": "SOC",
             "state_topic": f"{STATE_TOPIC}/state",
             "unit_of_measurement": "%",
-            "value_template": "{{ value_json.soc_candidate }}",
-            "unique_id": f"{DEVICE_ID}_soc_candidate",
+            "value_template": "{{ value_json.soc }}",
+            "unique_id": f"{DEVICE_ID}_soc",
             "device": device_conf,
             "json_attributes_topic": f"{DEBUG_TOPIC}/state",
         },
         f"{STATE_TOPIC}_voltage/config": {
             "device_class": "voltage",
-            "name": "Battery Voltage Candidate",
+            "name": "Voltage",
             "state_topic": f"{STATE_TOPIC}/state",
             "unit_of_measurement": "V",
-            "value_template": "{{ value_json.pack_voltage_candidate }}",
-            "unique_id": f"{DEVICE_ID}_pack_voltage_candidate",
+            "value_template": "{{ value_json.voltage }}",
+            "unique_id": f"{DEVICE_ID}_voltage",
             "device": device_conf,
         },
         f"{STATE_TOPIC}_current/config": {
-            "name": "Battery Current Candidate Raw",
+            "device_class": "current",
+            "name": "Current",
             "state_topic": f"{STATE_TOPIC}/state",
-            "unit_of_measurement": "raw",
-            "value_template": "{{ value_json.current_candidate_raw }}",
-            "unique_id": f"{DEVICE_ID}_current_candidate_raw",
+            "unit_of_measurement": "A",
+            "value_template": "{{ value_json.current }}",
+            "unique_id": f"{DEVICE_ID}_current",
+            "device": device_conf,
+        },
+        f"{STATE_TOPIC}_power/config": {
+            "device_class": "power",
+            "name": "Power",
+            "state_topic": f"{STATE_TOPIC}/state",
+            "unit_of_measurement": "W",
+            "value_template": "{{ value_json.power }}",
+            "unique_id": f"{DEVICE_ID}_power",
+            "device": device_conf,
+        },
+        f"{STATE_TOPIC}_remaining_ah/config": {
+            "name": "Charge",
+            "state_topic": f"{STATE_TOPIC}/state",
+            "unit_of_measurement": "Ah",
+            "value_template": "{{ value_json.remaining_charge_ah }}",
+            "unique_id": f"{DEVICE_ID}_remaining_charge_ah",
             "device": device_conf,
         },
         f"{CELLS_TOPIC}/config": {
             "device_class": "voltage",
-            "name": "Battery Cell Balance",
+            "name": "Cell Volt delta",
             "state_topic": f"{CELLS_TOPIC}/state",
             "unit_of_measurement": "V",
             "value_template": "{{ value_json.diff }}",
             "json_attributes_topic": f"{CELLS_TOPIC}/state",
-            "unique_id": f"{DEVICE_ID}_balance",
+            "unique_id": f"{DEVICE_ID}_cell_delta",
+            "device": device_conf,
+        },
+        f"{CELLS_TOPIC}_avg/config": {
+            "device_class": "voltage",
+            "name": "Cell Volt average",
+            "state_topic": f"{CELLS_TOPIC}/state",
+            "unit_of_measurement": "V",
+            "value_template": "{{ value_json.avg }}",
+            "unique_id": f"{DEVICE_ID}_cell_avg",
+            "device": device_conf,
+        },
+        f"{CELLS_TOPIC}_min/config": {
+            "device_class": "voltage",
+            "name": "Cell Volt min",
+            "state_topic": f"{CELLS_TOPIC}/state",
+            "unit_of_measurement": "V",
+            "value_template": "{{ value_json.min }}",
+            "unique_id": f"{DEVICE_ID}_cell_min",
+            "device": device_conf,
+        },
+        f"{CELLS_TOPIC}_max/config": {
+            "device_class": "voltage",
+            "name": "Cell Volt max",
+            "state_topic": f"{CELLS_TOPIC}/state",
+            "unit_of_measurement": "V",
+            "value_template": "{{ value_json.max }}",
+            "unique_id": f"{DEVICE_ID}_cell_max",
+            "device": device_conf,
+        },
+        f"{CELLS_TOPIC}_min_idx/config": {
+            "name": "Cell Index min",
+            "state_topic": f"{CELLS_TOPIC}/state",
+            "value_template": "{{ value_json.minCell }}",
+            "unique_id": f"{DEVICE_ID}_cell_min_index",
+            "device": device_conf,
+        },
+        f"{CELLS_TOPIC}_max_idx/config": {
+            "name": "Cell Index max",
+            "state_topic": f"{CELLS_TOPIC}/state",
+            "value_template": "{{ value_json.maxCell }}",
+            "unique_id": f"{DEVICE_ID}_cell_max_index",
             "device": device_conf,
         },
         f"{TEMP_TOPIC}/config": {
-            "name": "Temperature Candidate Raw",
+            "device_class": "temperature",
+            "name": "Temperature 1",
             "state_topic": f"{TEMP_TOPIC}/state",
-            "unit_of_measurement": "raw",
-            "value_template": "{{ value_json.value }}",
-            "unique_id": f"{DEVICE_ID}_temp_candidate_raw",
+            "unit_of_measurement": "°C",
+            "value_template": "{{ value_json.temperature_1 }}",
+            "unique_id": f"{DEVICE_ID}_temperature_1",
             "device": device_conf,
             "json_attributes_topic": f"{TEMP_TOPIC}/state",
+        },
+        f"{TEMP_TOPIC}_2/config": {
+            "device_class": "temperature",
+            "name": "Temperature 2",
+            "state_topic": f"{TEMP_TOPIC}/state",
+            "unit_of_measurement": "°C",
+            "value_template": "{{ value_json.temperature_2 }}",
+            "unique_id": f"{DEVICE_ID}_temperature_2",
+            "device": device_conf,
         },
         f"{RAW_TOPIC}/config": {
             "name": "Raw Block Hex",
@@ -192,6 +263,7 @@ def publish_discovery():
             "value_template": "{{ value_json.prefix }}",
             "unique_id": f"{DEVICE_ID}_raw_hex",
             "device": device_conf,
+            "entity_category": "diagnostic",
             "json_attributes_topic": f"{RAW_TOPIC}/state",
         },
         f"{MOS_TOPIC}/config": {
@@ -200,9 +272,21 @@ def publish_discovery():
             "value_template": "{{ value_json.value }}",
             "unique_id": f"{DEVICE_ID}_status_candidate_raw",
             "device": device_conf,
+            "entity_category": "diagnostic",
             "json_attributes_topic": f"{MOS_TOPIC}/state",
         },
     }
+
+    for cell_index in range(1, CELL_COUNT + 1):
+        discovery[f"{CELLS_TOPIC}_{cell_index:02d}/config"] = {
+            "device_class": "voltage",
+            "name": f"Cell Volt {cell_index:02d}",
+            "state_topic": f"{CELLS_TOPIC}/state",
+            "unit_of_measurement": "V",
+            "value_template": f"{{{{ value_json.cell_{cell_index} }}}}",
+            "unique_id": f"{DEVICE_ID}_cell_{cell_index:02d}",
+            "device": device_conf,
+        }
 
     log.info("Publishing MQTT discovery for %d entities", len(discovery))
     for topic, payload in discovery.items():
@@ -321,6 +405,53 @@ def cells_look_plausible(cells: List[float]) -> bool:
     return bool(cells) and all(2.0 <= cell <= 4.5 for cell in cells)
 
 
+def parse_temperature(raw_value: int) -> Optional[float]:
+    if raw_value in (0, 255, 65535):
+        return None
+    value = raw_value - 40
+    if -40 <= value <= 120:
+        return float(value)
+    return None
+
+
+def parse_main_metrics(block: bytes, cells_payload: Optional[dict] = None) -> dict:
+    voltage_raw = u16(block, 112)
+    current_raw = u16(block, 114)
+    soc_raw = u16(block, 116)
+    temp_1_raw = u16(block, 96)
+    temp_2_raw = u16(block, 98)
+
+    voltage = round(voltage_raw / 10.0, 1) if 0 < voltage_raw < 1000 else None
+    if voltage is None and cells_payload is not None:
+        voltage = round(cells_payload["sum"], 1)
+
+    current = None
+    if 25000 <= current_raw <= 35000:
+        current = round((current_raw - 30000) / 10.0, 1)
+
+    soc = round(soc_raw / 10.0, 1) if 0 < soc_raw <= 1000 else None
+    power = round(voltage * current, 1) if voltage is not None and current is not None else None
+
+    remaining_charge_ah = None
+    if soc is not None and NOMINAL_CAPACITY_AH > 0:
+        remaining_charge_ah = round(NOMINAL_CAPACITY_AH * soc / 100.0, 2)
+
+    return {
+        "voltage": voltage,
+        "voltage_raw": voltage_raw,
+        "current": current,
+        "current_raw": current_raw,
+        "soc": soc,
+        "soc_raw": soc_raw,
+        "power": power,
+        "remaining_charge_ah": remaining_charge_ah,
+        "temperature_1": parse_temperature(temp_1_raw),
+        "temperature_2": parse_temperature(temp_2_raw),
+        "temperature_1_raw": temp_1_raw,
+        "temperature_2_raw": temp_2_raw,
+    }
+
+
 def publish_raw(block: bytes):
     payload = {
         "prefix": hexdump(block[:32]),
@@ -367,39 +498,52 @@ def publish_cells(block: bytes) -> Optional[dict]:
 
 
 def publish_candidates(block: bytes, cells_payload: Optional[dict] = None):
-    """Publish candidate fields we can correlate over time."""
+    """Publish parsed metrics and a few raw debug fields for further mapping."""
     try:
-        pack_voltage_from_cells = None
-        if cells_payload is not None:
-            pack_voltage_from_cells = round(cells_payload["sum"], 1)
-
-        candidates = {
-            "soc_candidate": u16(block, 160),
-            "pack_voltage_candidate": pack_voltage_from_cells,
-            "current_candidate_raw": u16(block, 168),
+        metrics = parse_main_metrics(block, cells_payload)
+        state_payload = {
+            "voltage": metrics["voltage"],
+            "current": metrics["current"],
+            "power": metrics["power"],
+            "soc": metrics["soc"],
+            "remaining_charge_ah": metrics["remaining_charge_ah"],
         }
-        log.info("Candidates: %s", candidates)
-        publish(f"{STATE_TOPIC}/state", candidates)
+        log.info("Parsed metrics: %s", state_payload)
+        publish(f"{STATE_TOPIC}/state", state_payload)
 
         debug_payload = {
-            "word_80": u16(block, 160),
-            "word_81": u16(block, 162),
-            "word_82": u16(block, 164),
-            "word_83": u16(block, 166),
-            "word_84": u16(block, 168),
-            "word_85": u16(block, 170),
-            "word_86": u16(block, 172),
-            "word_87": u16(block, 174),
-            "word_88": u16(block, 176),
-            "word_89": u16(block, 178),
-            "pack_voltage_from_cells": pack_voltage_from_cells,
+            "word_48": u16(block, 96),
+            "word_49": u16(block, 98),
+            "word_56": u16(block, 112),
+            "word_57": u16(block, 114),
+            "word_58": u16(block, 116),
+            "word_59": u16(block, 118),
+            "word_60": u16(block, 120),
+            "word_61": u16(block, 122),
+            "word_62": u16(block, 124),
+            "word_63": u16(block, 126),
+            "word_64": u16(block, 128),
+            "word_65": u16(block, 130),
+            "word_66": u16(block, 132),
+            "word_67": u16(block, 134),
+            "word_68": u16(block, 136),
+            "word_69": u16(block, 138),
+            "word_70": u16(block, 140),
+            "word_75": u16(block, 150),
+            "word_76": u16(block, 152),
+            "word_78": u16(block, 156),
+            "pack_voltage_from_cells": round(cells_payload["sum"], 1) if cells_payload else None,
+            "voltage_raw": metrics["voltage_raw"],
+            "current_raw": metrics["current_raw"],
+            "soc_raw": metrics["soc_raw"],
         }
         publish(f"{DEBUG_TOPIC}/state", debug_payload)
 
         temp_payload = {
-            "value": u16(block, 176),
-            "raw_176": u16(block, 176),
-            "raw_178": u16(block, 178),
+            "temperature_1": metrics["temperature_1"],
+            "temperature_2": metrics["temperature_2"],
+            "raw_1": metrics["temperature_1_raw"],
+            "raw_2": metrics["temperature_2_raw"],
         }
         publish(f"{TEMP_TOPIC}/state", temp_payload)
 
