@@ -1,16 +1,22 @@
-#!/bin/bash
-set -euo pipefail
+#!/usr/bin/with-contenv bashio
 
-CONFIG_PATH=/data/options.json
+export DEVICE=$(bashio::config 'device')
+export DEVICE_ID=$(bashio::config 'device_id')
+export CELL_COUNT=$(bashio::config 'cells_in_series')
+export MQTT_SERVER=$(bashio::config 'mqtt_server')
+export MQTT_USER=$(bashio::config 'mqtt_user')
+export MQTT_PASS=$(bashio::config 'mqtt_pass')
+export MQTT_CLIENT_ID=$(bashio::config 'mqtt_client_id')
+export MQTT_DISCOVERY_PREFIX=$(bashio::config 'mqtt_discovery_prefix')
+export POLL_INTERVAL_SECONDS=$(bashio::config 'poll_interval_seconds')
 
-export MQTT_SERVER="$(jq --raw-output '.mqtt_server' "$CONFIG_PATH")"
-export MQTT_USER="$(jq --raw-output '.mqtt_user' "$CONFIG_PATH")"
-export MQTT_PASS="$(jq --raw-output '.mqtt_pass' "$CONFIG_PATH")"
-export MQTT_CLIENT_ID="$(jq --raw-output '.mqtt_client_id' "$CONFIG_PATH")"
-export MQTT_DISCOVERY_PREFIX="$(jq --raw-output '.mqtt_discovery_prefix' "$CONFIG_PATH")"
-export DEVICE="$(jq --raw-output '.device' "$CONFIG_PATH")"
-export DEVICE_ID="$(jq --raw-output '.device_id' "$CONFIG_PATH")"
-export CELL_COUNT="$(jq --raw-output '.cells_in_series' "$CONFIG_PATH")"
-export POLL_INTERVAL_SECONDS="$(jq --raw-output '.poll_interval_seconds' "$CONFIG_PATH")"
+echo "=== Daly Waveshare add-on starting ==="
+echo "DEVICE=$DEVICE"
+echo "DEVICE_ID=$DEVICE_ID"
+echo "CELL_COUNT=$CELL_COUNT"
+echo "MQTT_SERVER=$MQTT_SERVER"
+echo "MQTT_CLIENT_ID=$MQTT_CLIENT_ID"
+echo "MQTT_DISCOVERY_PREFIX=$MQTT_DISCOVERY_PREFIX"
+echo "POLL_INTERVAL_SECONDS=$POLL_INTERVAL_SECONDS"
 
-exec python3 /monitor.py
+exec python3 -u /monitor.py
