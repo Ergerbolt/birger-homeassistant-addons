@@ -4,25 +4,28 @@
 Adapted for Waveshare TCP-to-serial bridges via pySerial URL handlers, e.g.
 `socket://10.0.0.135:4196`.
 
-This version adds extensive logging so you can see:
-- startup and configuration
-- serial/TCP connection status
-- transmitted Daly protocol frames
-- received raw responses
-- parsed values
-- MQTT publishes
+This version adds:
+- continuous background reader
+- frame synchronization on Daly 13-byte frames
+- checksum validation
+- per-command response collection
+- extensive logging
 """
 
 import json
 import logging
 import os
 import sys
+import threading
 import time
-from typing import List
+from collections import defaultdict
+from typing import Dict, List, Optional
 
 import paho.mqtt.client as mqtt
 import serial
 
+
+print("=== monitor.py started ===", flush=True)
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -38,12 +41,18 @@ def hexdump(data: bytes) -> str:
     return " ".join(f"{b:02X}" for b in data)
 
 
+def checksum_ok(frame: bytes) -> bool:
+    if len(frame) != 13:
+        return False
+    return (sum(frame[:12]) & 0xFF) == frame[12]
+
+
 def open_serial(device: str):
     if "://" in device:
         log.info("Opening TCP serial bridge with serial_for_url: %s", device)
-        return serial.serial_for_url(device, baudrate=9600, timeout=1)
+        return serial.serial_for_url(device, baudrate=9600, timeout=0.1)
     log.info("Opening local serial port: %s", device)
-    return serial.Serial(device, 9600, timeout=1)
+    return serial.Serial(device, 9600, timeout=0.1)
 
 
 DEVICE = os.environ["DEVICE"]
@@ -177,54 +186,137 @@ def publish_discovery():
         publish(topic, payload, retain=True)
 
 
-def cmd(command: bytes) -> List[bytes]:
-    """Send one Daly command and read all 13-byte response frames."""
-    frames: List[bytes] = []
-    try:
-        log.debug("TX: %s", hexdump(command))
-        ser.reset_input_buffer()
-        ser.write(command)
-        ser.flush()
-        time.sleep(0.15)
+class DalyTransport:
+    def __init__(self, serial_port):
+        self.ser = serial_port
+        self.rx_buffer = bytearray()
+        self.frames_by_cmd: Dict[int, List[bytes]] = defaultdict(list)
+        self.lock = threading.Lock()
+        self.stop_event = threading.Event()
+        self.reader = threading.Thread(target=self._reader_loop, daemon=True)
+        self.reader.start()
+        log.info("Background reader thread started")
 
-        while True:
-            buf = ser.read(13)
-            if buf == b"":
-                break
-            log.debug("RX frame (%d bytes): %s", len(buf), hexdump(buf))
-            frames.append(buf)
+    def close(self):
+        self.stop_event.set()
+        try:
+            self.reader.join(timeout=1.0)
+        except Exception:
+            log.exception("Failed joining reader thread")
+
+    def _reader_loop(self):
+        log.info("Reader loop running")
+        while not self.stop_event.is_set():
+            try:
+                chunk = self.ser.read(256)
+                if not chunk:
+                    time.sleep(0.02)
+                    continue
+
+                log.debug("RX raw chunk (%d bytes): %s", len(chunk), hexdump(chunk))
+
+                with self.lock:
+                    self.rx_buffer.extend(chunk)
+                    self._extract_frames_locked()
+
+            except Exception:
+                log.exception("Reader loop exception")
+                time.sleep(0.2)
+
+    def _extract_frames_locked(self):
+        """Extract valid 13-byte Daly frames from the raw byte stream.
+
+        We search for frames starting with 0xA5 and valid checksum.
+        """
+        while len(self.rx_buffer) >= 13:
+            start = self.rx_buffer.find(b"\xA5")
+            if start < 0:
+                if self.rx_buffer:
+                    log.debug("Dropping %d unsynced bytes (no A5 found)", len(self.rx_buffer))
+                self.rx_buffer.clear()
+                return
+
+            if start > 0:
+                dropped = bytes(self.rx_buffer[:start])
+                log.debug("Dropping %d unsynced bytes before A5: %s", len(dropped), hexdump(dropped))
+                del self.rx_buffer[:start]
+
+            if len(self.rx_buffer) < 13:
+                return
+
+            candidate = bytes(self.rx_buffer[:13])
+
+            if checksum_ok(candidate):
+                cmd_id = candidate[2]
+                self.frames_by_cmd[cmd_id].append(candidate)
+                log.debug(
+                    "Accepted frame cmd=0x%02X frame=%s",
+                    cmd_id,
+                    hexdump(candidate),
+                )
+                del self.rx_buffer[:13]
+            else:
+                log.debug("Rejected candidate frame (bad checksum): %s", hexdump(candidate))
+                del self.rx_buffer[0]
+
+    def transact(self, command: bytes, wait_time: float = 0.4) -> List[bytes]:
+        """Send one Daly command and collect matching response frames."""
+        cmd_id = command[2]
+
+        with self.lock:
+            self.frames_by_cmd[cmd_id].clear()
+            self.rx_buffer.clear()
+
+        try:
+            log.debug("TX: %s", hexdump(command))
+            self.ser.write(command)
+            self.ser.flush()
+        except Exception:
+            log.exception("Failed to write command %s", hexdump(command))
+            return []
+
+        time.sleep(wait_time)
+
+        with self.lock:
+            frames = list(self.frames_by_cmd[cmd_id])
 
         if not frames:
-            log.warning("No response for command: %s", hexdump(command))
+            log.warning("No valid Daly frame received for cmd=0x%02X", cmd_id)
         else:
-            log.debug("Received %d frame(s) for command %s", len(frames), hexdump(command))
+            log.debug("Collected %d valid frame(s) for cmd=0x%02X", len(frames), cmd_id)
+            for i, frame in enumerate(frames, start=1):
+                log.debug("Frame %d cmd=0x%02X: %s", i, cmd_id, hexdump(frame))
 
-    except Exception:
-        log.exception("Command failed: %s", hexdump(command))
-
-    return frames
+        return frames
 
 
-def extract_cells_v(buffer: bytes):
+transport = DalyTransport(ser)
+
+
+def extract_cells_v(frame: bytes):
     return [
-        int.from_bytes(buffer[5:7], byteorder="big", signed=False),
-        int.from_bytes(buffer[7:9], byteorder="big", signed=False),
-        int.from_bytes(buffer[9:11], byteorder="big", signed=False),
+        int.from_bytes(frame[5:7], byteorder="big", signed=False),
+        int.from_bytes(frame[7:9], byteorder="big", signed=False),
+        int.from_bytes(frame[9:11], byteorder="big", signed=False),
     ]
 
 
 def get_cell_balance(cell_count: int):
-    res = cmd(b"\xa5\x40\x95\x08\x00\x00\x00\x00\x00\x00\x00\x00\x82")
-    if not res:
+    frames = transport.transact(b"\xA5\x40\x95\x08\x00\x00\x00\x00\x00\x00\x00\x00\x82", wait_time=0.5)
+    if not frames:
         log.warning("Empty response get_cell_balance")
         return
 
     try:
         cells = []
-        for frame in res:
+        for frame in frames:
             cells += extract_cells_v(frame)
 
         cells = cells[:cell_count]
+        if not cells:
+            log.warning("No cells parsed from balance frames")
+            return
+
         cells = [round(v / 1000, 3) for v in cells]
         total = round(sum(cells), 3)
         min_v = min(cells)
@@ -234,7 +326,7 @@ def get_cell_balance(cell_count: int):
         payload.update(
             {
                 "sum": round(total, 1),
-                "avg": round(total / cell_count, 3),
+                "avg": round(total / len(cells), 3),
                 "min": min_v,
                 "minCell": cells.index(min_v) + 1,
                 "max": max_v,
@@ -258,17 +350,17 @@ def get_cell_balance(cell_count: int):
 
 
 def get_battery_state():
-    res = cmd(b"\xa5\x40\x90\x08\x00\x00\x00\x00\x00\x00\x00\x00\x7d")
-    if not res:
+    frames = transport.transact(b"\xA5\x40\x90\x08\x00\x00\x00\x00\x00\x00\x00\x00\x7D", wait_time=0.35)
+    if not frames:
         log.warning("Empty response get_battery_state")
         return
 
     try:
-        buffer = res[0]
-        voltage = int.from_bytes(buffer[4:6], byteorder="big", signed=False) / 10
-        acquisition = int.from_bytes(buffer[6:8], byteorder="big", signed=False) / 10
-        current = int.from_bytes(buffer[8:10], byteorder="big", signed=False) / 10 - 3000
-        soc = int.from_bytes(buffer[10:12], byteorder="big", signed=False) / 10
+        frame = frames[0]
+        voltage = int.from_bytes(frame[4:6], byteorder="big", signed=False) / 10
+        acquisition = int.from_bytes(frame[6:8], byteorder="big", signed=False) / 10
+        current = int.from_bytes(frame[8:10], byteorder="big", signed=False) / 10 - 3000
+        soc = int.from_bytes(frame[10:12], byteorder="big", signed=False) / 10
 
         log.info(
             "Parsed battery state: voltage=%.1fV acquisition=%.1fA current=%.1fA soc=%.1f%%",
@@ -293,18 +385,18 @@ def get_battery_state():
 
 
 def get_battery_status():
-    res = cmd(b"\xa5\x40\x94\x08\x00\x00\x00\x00\x00\x00\x00\x00\x81")
-    if not res:
+    frames = transport.transact(b"\xA5\x40\x94\x08\x00\x00\x00\x00\x00\x00\x00\x00\x81", wait_time=0.35)
+    if not frames:
         log.warning("Empty response get_battery_status")
         return
 
     try:
-        buffer = res[0]
-        batt_string = int.from_bytes(buffer[4:5], byteorder="big", signed=False)
-        temp = int.from_bytes(buffer[5:6], byteorder="big", signed=False)
-        charger = int.from_bytes(buffer[6:7], byteorder="big", signed=False) == 1
-        load = int.from_bytes(buffer[7:8], byteorder="big", signed=False) == 1
-        cycles = int.from_bytes(buffer[9:11], byteorder="big", signed=False)
+        frame = frames[0]
+        batt_string = int.from_bytes(frame[4:5], byteorder="big", signed=False)
+        temp = int.from_bytes(frame[5:6], byteorder="big", signed=False)
+        charger = int.from_bytes(frame[6:7], byteorder="big", signed=False) == 1
+        load = int.from_bytes(frame[7:8], byteorder="big", signed=False) == 1
+        cycles = int.from_bytes(frame[9:11], byteorder="big", signed=False)
 
         log.info(
             "Parsed battery status: batt_string=%s temp=%s charger=%s load=%s cycles=%s",
@@ -331,17 +423,17 @@ def get_battery_status():
 
 
 def get_battery_temp():
-    res = cmd(b"\xa5\x40\x92\x08\x00\x00\x00\x00\x00\x00\x00\x00\x7f")
-    if not res:
+    frames = transport.transact(b"\xA5\x40\x92\x08\x00\x00\x00\x00\x00\x00\x00\x00\x7F", wait_time=0.35)
+    if not frames:
         log.warning("Empty response get_battery_temp")
         return
 
     try:
-        buffer = res[0]
-        max_temp = int.from_bytes(buffer[4:5], byteorder="big", signed=False) - 40
-        max_temp_cell = int.from_bytes(buffer[5:6], byteorder="big", signed=False)
-        min_temp = int.from_bytes(buffer[6:7], byteorder="big", signed=False) - 40
-        min_temp_cell = int.from_bytes(buffer[7:8], byteorder="big", signed=False)
+        frame = frames[0]
+        max_temp = int.from_bytes(frame[4:5], byteorder="big", signed=False) - 40
+        max_temp_cell = int.from_bytes(frame[5:6], byteorder="big", signed=False)
+        min_temp = int.from_bytes(frame[6:7], byteorder="big", signed=False) - 40
+        min_temp_cell = int.from_bytes(frame[7:8], byteorder="big", signed=False)
 
         payload = {
             "value": (max_temp + min_temp) / 2,
@@ -367,19 +459,19 @@ def get_battery_temp():
 
 
 def get_battery_mos_status():
-    res = cmd(b"\xa5\x40\x93\x08\x00\x00\x00\x00\x00\x00\x00\x00\x80")
-    if not res:
+    frames = transport.transact(b"\xA5\x40\x93\x08\x00\x00\x00\x00\x00\x00\x00\x00\x80", wait_time=0.35)
+    if not frames:
         log.warning("Empty response get_battery_mos_status")
         return
 
     try:
-        buffer = res[0]
-        value_byte = int.from_bytes(buffer[4:5], byteorder="big", signed=False)
+        frame = frames[0]
+        value_byte = int.from_bytes(frame[4:5], byteorder="big", signed=False)
         value = "discharging" if value_byte == 2 else ("charging" if value_byte == 1 else "idle")
-        charge_mos = int.from_bytes(buffer[5:6], byteorder="big", signed=False)
-        discharge_mos = int.from_bytes(buffer[6:7], byteorder="big", signed=False)
-        bms_life = int.from_bytes(buffer[7:8], byteorder="big", signed=False)
-        residual_capacity = int.from_bytes(buffer[8:12], byteorder="big", signed=False)
+        charge_mos = int.from_bytes(frame[5:6], byteorder="big", signed=False)
+        discharge_mos = int.from_bytes(frame[6:7], byteorder="big", signed=False)
+        bms_life = int.from_bytes(frame[7:8], byteorder="big", signed=False)
+        residual_capacity = int.from_bytes(frame[8:12], byteorder="big", signed=False)
 
         payload = {
             "value": value,
@@ -422,6 +514,10 @@ try:
 
 finally:
     log.info("Shutting down Daly BMS monitor")
+    try:
+        transport.close()
+    except Exception:
+        log.exception("Failed to stop transport")
     try:
         ser.close()
         log.info("Serial/TCP connection closed")
