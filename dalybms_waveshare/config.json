@@ -1,6 +1,6 @@
 {
   "name": "WNT/Deye Block Monitor over Modbus TCP",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "slug": "dalybms_waveshare",
   "description": "Reads a fixed WNT/Deye Modbus TCP block and publishes candidate values to MQTT",
   "startup": "application",
