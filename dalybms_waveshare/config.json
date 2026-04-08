@@ -5,6 +5,7 @@
   "description": "Reads a fixed WNT/Deye Modbus TCP block and publishes candidate values to MQTT",
   "startup": "application",
   "boot": "auto",
+  "init": false,
   "arch": ["amd64", "aarch64", "armv7"],
   "options": {
     "mqtt_server": "core-mosquitto",
