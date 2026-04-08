@@ -1,6 +1,6 @@
 {
   "name": "Daly Smart BMS over Waveshare",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "slug": "dalybms_waveshare",
   "description": "Reads Daly Smart BMS data over a Waveshare TCP-to-serial bridge and publishes to MQTT",
   "arch": ["amd64", "aarch64", "armv7", "i386"],
