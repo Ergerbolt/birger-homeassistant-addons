@@ -1,0 +1,32 @@
+{
+  "name": "Daly Smart BMS over Waveshare",
+  "version": "1.0.0",
+  "slug": "dalybms_waveshare",
+  "description": "Reads Daly Smart BMS data over a Waveshare TCP-to-serial bridge and publishes to MQTT",
+  "arch": ["amd64", "aarch64", "armv7", "i386"],
+  "startup": "application",
+  "boot": "auto",
+  "init": false,
+  "options": {
+    "mqtt_server": "core-mosquitto",
+    "mqtt_user": "mqtt",
+    "mqtt_pass": "mqtt",
+    "mqtt_client_id": "dalybms_waveshare",
+    "mqtt_discovery_prefix": "homeassistant",
+    "device": "socket://10.0.0.135:4196",
+    "device_id": "Daly-Smart-BMS",
+    "cells_in_series": 16,
+    "poll_interval_seconds": 2
+  },
+  "schema": {
+    "mqtt_server": "str",
+    "mqtt_user": "str",
+    "mqtt_pass": "password",
+    "mqtt_client_id": "str",
+    "mqtt_discovery_prefix": "str",
+    "device": "str",
+    "device_id": "str",
+    "cells_in_series": "int(1,)",
+    "poll_interval_seconds": "int(1,)"
+  }
+}
