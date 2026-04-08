@@ -6,7 +6,8 @@ import socket
 import struct
 import sys
 import time
-from typing import List, Optional
+from typing import List, Optional, Tuple
+from urllib.parse import urlparse
 
 import paho.mqtt.client as mqtt
 
@@ -43,6 +44,39 @@ MODBUS_START = int(os.environ.get("MODBUS_START", "0"))
 MODBUS_COUNT = int(os.environ.get("MODBUS_COUNT", "127"))
 SOCKET_TIMEOUT = float(os.environ.get("SOCKET_TIMEOUT", "3"))
 
+
+def resolve_connection_target(device: str, default_port: int) -> Tuple[str, int]:
+    host = device.strip()
+
+    if "://" in host:
+        parsed = urlparse(host)
+        if parsed.hostname:
+            host = parsed.hostname
+        if parsed.port is not None and parsed.port != default_port:
+            log.warning(
+                "DEVICE contains port %s but MODBUS_PORT=%s is configured; using MODBUS_PORT",
+                parsed.port,
+                default_port,
+            )
+    elif host.count(":") == 1:
+        maybe_host, maybe_port = host.rsplit(":", 1)
+        if maybe_host and maybe_port.isdigit():
+            host = maybe_host
+            if int(maybe_port) != default_port:
+                log.warning(
+                    "DEVICE contains port %s but MODBUS_PORT=%s is configured; using MODBUS_PORT",
+                    maybe_port,
+                    default_port,
+                )
+
+    if not host:
+        raise ValueError("DEVICE must not be empty")
+
+    return host, default_port
+
+
+CONNECTION_HOST, CONNECTION_PORT = resolve_connection_target(DEVICE, MODBUS_PORT)
+
 log.info("Starting WNT/Deye block monitor")
 log.info("DEVICE=%s", DEVICE)
 log.info("DEVICE_ID=%s", DEVICE_ID)
@@ -55,6 +89,8 @@ log.info("MODBUS_PORT=%s", MODBUS_PORT)
 log.info("MODBUS_UNIT_ID=%s", MODBUS_UNIT_ID)
 log.info("MODBUS_START=%s", MODBUS_START)
 log.info("MODBUS_COUNT=%s", MODBUS_COUNT)
+log.info("CONNECTION_HOST=%s", CONNECTION_HOST)
+log.info("CONNECTION_PORT=%s", CONNECTION_PORT)
 
 
 client = mqtt.Client(client_id=MQTT_CLIENT_ID)
@@ -281,6 +317,10 @@ def parse_cell_voltages(block: bytes, cell_count: int) -> List[float]:
     return cells
 
 
+def cells_look_plausible(cells: List[float]) -> bool:
+    return bool(cells) and all(2.0 <= cell <= 4.5 for cell in cells)
+
+
 def publish_raw(block: bytes):
     payload = {
         "prefix": hexdump(block[:32]),
@@ -290,9 +330,13 @@ def publish_raw(block: bytes):
     publish(f"{RAW_TOPIC}/state", payload)
 
 
-def publish_cells(block: bytes):
+def publish_cells(block: bytes) -> Optional[dict]:
     try:
         cells = parse_cell_voltages(block, CELL_COUNT)
+        if not cells_look_plausible(cells):
+            log.warning("Cell voltages look implausible: %s", cells)
+            return None
+
         min_v = min(cells)
         max_v = max(cells)
         payload = {f"cell_{i+1}": v for i, v in enumerate(cells)}
@@ -316,16 +360,22 @@ def publish_cells(block: bytes):
             payload["diff"],
         )
         publish(f"{CELLS_TOPIC}/state", payload)
+        return payload
     except Exception:
         log.exception("Failed to parse/publish cells")
+        return None
 
 
-def publish_candidates(block: bytes):
+def publish_candidates(block: bytes, cells_payload: Optional[dict] = None):
     """Publish candidate fields we can correlate over time."""
     try:
+        pack_voltage_from_cells = None
+        if cells_payload is not None:
+            pack_voltage_from_cells = round(cells_payload["sum"], 1)
+
         candidates = {
             "soc_candidate": u16(block, 160),
-            "pack_voltage_candidate": round(u16(block, 172) / 10.0, 1),
+            "pack_voltage_candidate": pack_voltage_from_cells,
             "current_candidate_raw": u16(block, 168),
         }
         log.info("Candidates: %s", candidates)
@@ -342,6 +392,7 @@ def publish_candidates(block: bytes):
             "word_87": u16(block, 174),
             "word_88": u16(block, 176),
             "word_89": u16(block, 178),
+            "pack_voltage_from_cells": pack_voltage_from_cells,
         }
         publish(f"{DEBUG_TOPIC}/state", debug_payload)
 
@@ -376,7 +427,7 @@ def publish_candidates(block: bytes):
 
 publish_discovery()
 
-modbus = ModbusTcpClient(DEVICE, MODBUS_PORT, SOCKET_TIMEOUT)
+modbus = ModbusTcpClient(CONNECTION_HOST, CONNECTION_PORT, SOCKET_TIMEOUT)
 
 try:
     while True:
@@ -396,8 +447,8 @@ try:
 
         log.info("Parsed fixed block with %d bytes", len(block))
         publish_raw(block)
-        publish_cells(block)
-        publish_candidates(block)
+        cells_payload = publish_cells(block)
+        publish_candidates(block, cells_payload)
 
         time.sleep(POLL_INTERVAL_SECONDS)
 
