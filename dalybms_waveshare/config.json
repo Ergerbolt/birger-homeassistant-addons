@@ -1,22 +1,26 @@
 {
-  "name": "Daly Smart BMS over Waveshare",
-  "version": "1.0.2",
+  "name": "WNT/Deye Block Monitor over Modbus TCP",
+  "version": "1.1.0",
   "slug": "dalybms_waveshare",
-  "description": "Reads Daly Smart BMS data over a Waveshare TCP-to-serial bridge and publishes to MQTT",
-  "arch": ["amd64", "aarch64", "armv7", "i386"],
+  "description": "Reads a fixed WNT/Deye Modbus TCP block and publishes candidate values to MQTT",
   "startup": "application",
   "boot": "auto",
-  "init": false,
+  "arch": ["amd64", "aarch64", "armv7"],
   "options": {
     "mqtt_server": "core-mosquitto",
     "mqtt_user": "mqtt",
     "mqtt_pass": "mqtt",
     "mqtt_client_id": "dalybms_waveshare",
     "mqtt_discovery_prefix": "homeassistant",
-    "device": "socket://10.0.0.135:4196",
-    "device_id": "Daly-Smart-BMS",
+    "device": "10.0.0.135",
+    "device_id": "WNT-BMS",
     "cells_in_series": 16,
-    "poll_interval_seconds": 2
+    "poll_interval_seconds": 10,
+    "modbus_port": 502,
+    "modbus_unit_id": 81,
+    "modbus_start": 0,
+    "modbus_count": 127,
+    "socket_timeout": 3
   },
   "schema": {
     "mqtt_server": "str",
@@ -26,7 +30,12 @@
     "mqtt_discovery_prefix": "str",
     "device": "str",
     "device_id": "str",
-    "cells_in_series": "int(1,)",
-    "poll_interval_seconds": "int(1,)"
+    "cells_in_series": "int(1,32)",
+    "poll_interval_seconds": "int(1,300)",
+    "modbus_port": "int(1,65535)",
+    "modbus_unit_id": "int(0,255)",
+    "modbus_start": "int(0,65535)",
+    "modbus_count": "int(1,127)",
+    "socket_timeout": "float"
   }
 }

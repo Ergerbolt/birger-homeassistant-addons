@@ -4,7 +4,7 @@ FROM ${BUILD_FROM}
 ENV LANG=C.UTF-8
 
 RUN apk add --no-cache python3 py3-pip jq && \
-    python3 -m pip install --no-cache-dir --break-system-packages paho-mqtt pyserial
+    python3 -m pip install --no-cache-dir --break-system-packages paho-mqtt
 
 COPY monitor.py /monitor.py
 COPY rootfs /
