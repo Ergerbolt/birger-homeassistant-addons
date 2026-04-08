@@ -3,12 +3,9 @@ FROM ${BUILD_FROM}
 
 ENV LANG=C.UTF-8
 
-COPY requirements.txt /
 RUN apk add --no-cache python3 py3-pip jq && \
-    python3 -m pip install --no-cache-dir --break-system-packages -r /requirements.txt
+    python3 -m pip install --no-cache-dir --break-system-packages paho-mqtt pyserial
 
-COPY run.sh /
-COPY monitor.py /
-RUN chmod a+x /run.sh
-
-CMD [ "/run.sh" ]
+COPY monitor.py /monitor.py
+COPY rootfs /
+RUN chmod a+x /etc/services.d/dalybms/run
