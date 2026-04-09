@@ -1,0 +1,68 @@
+{
+  "folders": [
+    {
+      "name": "Repository",
+      "path": "."
+    },
+    {
+      "name": "Addon",
+      "path": "dalybms_waveshare"
+    }
+  ],
+  "settings": {
+    "files.exclude": {
+      "**/__pycache__": true,
+      "**/.pytest_cache": true
+    },
+    "search.exclude": {
+      "**/__pycache__": true,
+      "**/.pytest_cache": true
+    },
+    "explorer.fileNesting.enabled": true,
+    "explorer.fileNesting.patterns": {
+      "README.md": "repository.yaml, dalybms_waveshare",
+      "config.json": "requirements.txt, Dockerfile, run.sh, rootfs"
+    },
+    "files.associations": {
+      "repository.yaml": "yaml",
+      "*.sh": "shellscript"
+    },
+    "editor.formatOnSave": true,
+    "editor.tabSize": 2,
+    "editor.insertSpaces": true,
+    "files.trimTrailingWhitespace": true,
+    "files.insertFinalNewline": true,
+    "python.defaultInterpreterPath": "/usr/bin/python3",
+    "python.analysis.typeCheckingMode": "basic",
+    "python.analysis.autoImportCompletions": true,
+    "python.analysis.exclude": [
+      "**/__pycache__"
+    ],
+    "python.analysis.extraPaths": [
+      "${workspaceFolder:Addon}"
+    ],
+    "[python]": {
+      "editor.defaultFormatter": "ms-python.black-formatter"
+    },
+    "[json]": {
+      "editor.defaultFormatter": "vscode.json-language-features"
+    },
+    "[yaml]": {
+      "editor.defaultFormatter": "redhat.vscode-yaml"
+    },
+    "[shellscript]": {
+      "editor.defaultFormatter": "foxundermoon.shell-format"
+    }
+  },
+  "extensions": {
+    "recommendations": [
+      "ms-python.python",
+      "ms-python.vscode-pylance",
+      "ms-python.black-formatter",
+      "redhat.vscode-yaml",
+      "ms-azuretools.vscode-docker",
+      "timonwong.shellcheck",
+      "foxundermoon.shell-format"
+    ]
+  }
+}

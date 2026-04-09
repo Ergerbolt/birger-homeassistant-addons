@@ -1,6 +1,8 @@
 # WNT/Deye Block Monitor over Modbus TCP
 
-Dieses Add-on liest einen festen Modbus-TCP-Datenblock von einem WNT/Deye-artigen BMS oder Gateway und veroeffentlicht die aus dem Block abgeleiteten Kandidatenwerte per MQTT Discovery an Home Assistant.
+Dieses Add-on liest einen festen Modbus-TCP-Datenblock von einem WNT/Deye-artigen BMS oder Gateway und veroeffentlicht die daraus dekodierten Live-Daten per MQTT Discovery an Home Assistant.
+
+Die Feldzuordnung basiert auf dem dekompilierten Windows-Tool `BMSTool` und ist damit deutlich naeher an der Original-Registerkarte als die fruehere reine Heuristik.
 
 ## Voraussetzungen
 
@@ -25,9 +27,24 @@ Dieses Add-on liest einen festen Modbus-TCP-Datenblock von einem WNT/Deye-artige
 ## Verhalten
 
 - Das Add-on liest pro Zyklus genau einen Block per Modbus TCP.
-- Es publiziert rohe Hex-Daten sowie mehrere heuristische Kandidatenwerte.
-- Zellspannungen werden aus den ersten Worten des Blocks abgeleitet.
-- SOC, Spannung, Strom, Temperatur und Status sind aktuell als Kandidaten bzw. Rohwerte zu verstehen und koennen je nach Geraet noch Feintuning brauchen.
+- Es publiziert rohe Hex-Daten und dekodierte Register aus dem `0x00..0x7E`-Live-Block.
+- Zellspannungen und NTC-Temperaturen werden direkt aus der Registerkarte gelesen.
+- Mehrere Status- und Diagnosewerte werden als Sensoren oder Binary-Sensoren in Home Assistant angelegt.
+
+## Verfuegbare Daten
+
+Unter anderem werden jetzt folgende Werte veroeffentlicht:
+
+- SOC, Packspannung, Strom, Leistung
+- Berechnete Restladung in Ah und direkte Restkapazitaet aus dem BMS
+- Einzelzellspannungen, Min/Max/Differenz, aktive Balance-Zellen
+- Temperatur 1 bis 8 sowie Max/Min/Temperaturdifferenz
+- Charge-, Discharge-, Precharge-, Heat- und Fan-MOS als Binary-Sensoren
+- MOS-, Board- und Heater-Temperatur
+- Backup Current, Limit Current, Cycle Count, BMS Life
+- DI/DO, Wakeup Source, Battery Status, Charge Detect, Load Detect
+- AFE Current, AFE Factor, AFE Offset, AFE ADC, PWM Duty, PWM Voltage
+- Aktive Alarme inklusive Alarmliste als MQTT-Attribute
 
 ## Installation
 
