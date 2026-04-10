@@ -198,6 +198,84 @@ SPECIAL_ALARM_TEXTS = [
     "Voltage difference high level 3",
 ]
 
+FAULT_LEVEL_BASE_TEXTS = [
+    "single voltage high",
+    "single voltage low",
+    "voltage diff high",
+    "charging temp high",
+    "charging temp low",
+    "discharging temp high",
+    "discharging temp low",
+    "temp diff high",
+    "total voltage high",
+    "total voltage low",
+    "charging current high",
+    "discharging current high",
+    "SOC low",
+    "SOH low",
+    "MOS temp high",
+    "thermal runaway",
+    "ambient temperature",
+    "error2",
+    "error3",
+    "error4",
+    "error5",
+    "error6",
+]
+
+FAULT_BIT_TEXTS = [
+    "smart charger connection",
+    "smart charger disconnection",
+    "smart discharger connection",
+    "smart discharger disconnection",
+    "charging MOS temp high",
+    "charging MOS temp detection failure",
+    "discharging MOS temp high",
+    "discharging MOS temp detection failure",
+    "short circuit protection",
+    "upgrade sign",
+    "low voltage prohibit charging",
+    "high voltage prohibit discharging",
+    "intranet parallel comm ok",
+    "intranet parallel comm fail",
+    "BLE communication error",
+    "program inconsistent BMS",
+    "balance module communication error",
+    "balance opening condition not met",
+    "battery fully charged",
+    "error code Byte9 Bit7",
+    "error code Byte10 Bit6",
+    "error code Byte10 Bit7",
+    "AFE IC fault",
+    "AFE IC communication fault",
+    "AFE IC AD fault",
+    "voltage acquisition failure",
+    "voltage acquisition line disconnected",
+    "total voltage detection failure",
+    "current detection failure",
+    "temperature detection failure",
+    "temperature acquisition line disconnected",
+    "EEPROM fault",
+    "FLASH fault",
+    "RTC fault",
+    "charge MOS fault",
+    "discharge MOS fault",
+    "pre-charge MOS fault",
+    "pre-charge failed",
+    "communication command turned off charge MOS",
+    "communication command turned off discharge MOS",
+    "key turned off charge MOS",
+    "key turned off discharge MOS",
+    "fan work",
+    "heat work",
+    "current limiting module works",
+    "heating fault",
+    "heating status",
+    "DMOS force on status",
+    "full battery charge",
+    "balance module communication fault",
+]
+
 
 def publish(topic: str, payload: dict, retain: bool = False):
     try:
@@ -738,6 +816,15 @@ def publish_discovery():
             entity_category="diagnostic",
             json_attributes_topic=f"{STATUS_TOPIC}/state",
         ),
+        f"{STATUS_TOPIC}_fault_count/config": build_sensor_discovery(
+            "Active Faults",
+            "active_fault_count",
+            f"{STATUS_TOPIC}/state",
+            "active_fault_count",
+            device_conf,
+            entity_category="diagnostic",
+            json_attributes_topic=f"{STATUS_TOPIC}/state",
+        ),
         f"{RAW_TOPIC}/config": build_sensor_discovery(
             "Raw Block Hex",
             "raw_hex",
@@ -806,6 +893,15 @@ def publish_discovery():
             device_conf,
             entity_category="diagnostic",
             value_template="{{ 'ON' if (value_json.active_alarm_count | int) > 0 else 'OFF' }}",
+        ),
+        f"{BINARY_BASE_TOPIC}{DEVICE_ID}_fault_active/config": build_binary_sensor_discovery(
+            "Fault Active",
+            "fault_active",
+            f"{STATUS_TOPIC}/state",
+            "active_fault_count",
+            device_conf,
+            entity_category="diagnostic",
+            value_template="{{ 'ON' if (value_json.active_fault_count | int) > 0 else 'OFF' }}",
         ),
     }
 
@@ -1008,6 +1104,54 @@ def decode_alarm_bytes(error_bytes: List[int]) -> List[str]:
     return active_alarms
 
 
+def decode_new_fault_bytes(new_fault_bytes: List[int]) -> List[str]:
+    active_faults: List[str] = []
+
+    # Bytes 0..10 contain two 3-bit level faults and two 1-bit status faults.
+    for byte_index, value in enumerate(new_fault_bytes[:11]):
+        low_level = value & 0x07
+        low_group_index = 2 * byte_index
+        if low_level > 0 and low_group_index < len(FAULT_LEVEL_BASE_TEXTS):
+            label = f"{FAULT_LEVEL_BASE_TEXTS[low_group_index]} lv{low_level}"
+            if label not in active_faults:
+                active_faults.append(label)
+
+        high_level = (value >> 3) & 0x07
+        high_group_index = low_group_index + 1
+        if high_level > 0 and high_group_index < len(FAULT_LEVEL_BASE_TEXTS):
+            label = f"{FAULT_LEVEL_BASE_TEXTS[high_group_index]} lv{high_level}"
+            if label not in active_faults:
+                active_faults.append(label)
+
+        if ((value >> 6) & 1) == 1:
+            bit_label_index = 2 * byte_index
+            if bit_label_index < len(FAULT_BIT_TEXTS):
+                label = FAULT_BIT_TEXTS[bit_label_index]
+                if label not in active_faults:
+                    active_faults.append(label)
+
+        if ((value >> 7) & 1) == 1:
+            bit_label_index = 2 * byte_index + 1
+            if bit_label_index < len(FAULT_BIT_TEXTS):
+                label = FAULT_BIT_TEXTS[bit_label_index]
+                if label not in active_faults:
+                    active_faults.append(label)
+
+    # Bytes 11..13 are pure bit fields mapped to FaultBit[22..].
+    for byte_index, value in enumerate(new_fault_bytes[11:14], start=11):
+        for bit_index in range(8):
+            if ((value >> bit_index) & 1) != 1:
+                continue
+            bit_label_index = (byte_index - 11) * 8 + bit_index + 22
+            if bit_label_index >= len(FAULT_BIT_TEXTS):
+                continue
+            label = FAULT_BIT_TEXTS[bit_label_index]
+            if label not in active_faults:
+                active_faults.append(label)
+
+    return active_faults
+
+
 def parse_balance_active_cells(block: bytes, cell_count: int) -> List[int]:
     active_cells: List[int] = []
     balance_bytes = list(block[158:164])
@@ -1052,6 +1196,8 @@ def parse_main_metrics(block: bytes, cells_payload: Optional[dict] = None) -> di
     for word in error_words:
         error_bytes.extend([(word >> 8) & 0xFF, word & 0xFF])
     active_alarms = decode_alarm_bytes(error_bytes)
+    new_fault_bytes = list(block[218:232])
+    active_faults = decode_new_fault_bytes(new_fault_bytes)
 
     effective_cell_count = CELL_COUNT
     if 0 < detected_cell_count <= 48:
@@ -1123,9 +1269,11 @@ def parse_main_metrics(block: bytes, cells_payload: Optional[dict] = None) -> di
         "error_bytes": error_bytes,
         "active_alarms": active_alarms,
         "active_alarm_count": len(active_alarms),
+        "active_faults": active_faults,
+        "active_fault_count": len(active_faults),
         "backup_current": parse_signed_current(reg_u16(block, 106)),
         "wakeup_source": reg_u16(block, 107) if reg_u16(block, 107) != 65535 else None,
-        "new_fault_bytes": list(block[218:232]),
+        "new_fault_bytes": new_fault_bytes,
         "afe_current": parse_signed_current(reg_u16(block, 116)),
         "afe_factor": round(reg_u16(block, 117) / 10000.0, 4) if reg_u16(block, 117) != 65535 else None,
         "afe_offset": round(s16(reg_u16(block, 118)) / 10.0, 1) if reg_u16(block, 118) != 65535 else None,
@@ -1345,6 +1493,8 @@ def publish_candidates(block: bytes, cells_payload: Optional[dict] = None):
             "new_fault_bytes": metrics["new_fault_bytes"],
             "active_alarm_count": metrics["active_alarm_count"],
             "active_alarms": metrics["active_alarms"],
+            "active_fault_count": metrics["active_fault_count"],
+            "active_faults": metrics["active_faults"],
         }
         publish(f"{STATUS_TOPIC}/state", status_payload)
 
