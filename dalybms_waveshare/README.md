@@ -1,55 +1,48 @@
-# WNT/Deye Block Monitor over Modbus TCP
+# Daly WNT BMS MQTT Bridge (Waveshare RS485/TCP)
 
-Dieses Add-on liest einen festen Modbus-TCP-Datenblock von einem WNT/Deye-artigen BMS oder Gateway und veroeffentlicht die daraus dekodierten Live-Daten per MQTT Discovery an Home Assistant.
+Dieses Add-on verbindet ein Daly WNT Board ueber RS485 mit Home Assistant.
+Die Verbindung laeuft ueber einen Waveshare RS485-to-RJ45 Ethernet Converter (TCP/IP zu Serial).
+Das Add-on liest den festen Live-Datenblock per Modbus TCP und publiziert die dekodierten Werte per MQTT Discovery.
 
-Die Feldzuordnung basiert auf dem dekompilierten Windows-Tool `BMSTool` und ist damit deutlich naeher an der Original-Registerkarte als die fruehere reine Heuristik.
+Hinweis: Kein Deye-Inverter-Addon. Der Wechselrichter ist hier nicht beteiligt.
 
-## Voraussetzungen
+## Hardware-Setup
 
-- Ein erreichbarer Modbus-TCP-Endpunkt
-- Ein Geraet, das auf `Read Holding Registers` mit einem festen 254-Byte-Block antwortet
-- MQTT Broker in Home Assistant, z. B. Mosquitto
+- Daly WNT Board (RS485)
+- Waveshare RS485 to RJ45 Ethernet Converter Module (Industrial Rail-Mount Isolated RS485 Serial Server, TCP/IP to Serial)
+- Home Assistant mit MQTT Broker (z. B. Mosquitto)
 
-## Add-on-Optionen
+## Add-on Optionen
 
 - `mqtt_server`: meist `core-mosquitto`
-- `mqtt_user`, `mqtt_pass`: Zugangsdaten fuer MQTT
-- `device`: Hostname oder IP des Modbus-TCP-Endpunkts, z. B. `10.0.0.135`
-- `device_id`: frei waehlbare Geraetekennung
-- `cells_in_series`: z. B. `16`
-- `poll_interval_seconds`: z. B. `10`
+- `mqtt_user`, `mqtt_pass`: MQTT Zugangsdaten
+- `mqtt_client_id`: eindeutiger MQTT Client Name
+- `mqtt_discovery_prefix`: in der Regel `homeassistant`
+- `device`: IP/Hostname des Waveshare TCP Moduls, z. B. `10.0.0.135`
+- `device_id`: frei waehlbare BMS Kennung in Home Assistant
+- `cells_in_series`: Anzahl Zellen in Serie, z. B. `16`
+- `nominal_capacity_ah`: optional fuer berechnete Restladung
+- `poll_interval_seconds`: Abfrageintervall
 - `modbus_port`: meist `502`
-- `modbus_unit_id`: Standard in diesem Add-on `81`
-- `modbus_start`: Startregister, standardmaessig `0`
-- `modbus_count`: Anzahl Register, standardmaessig `127`
-- `socket_timeout`: Socket-Timeout in Sekunden, z. B. `3`
+- `modbus_unit_id`: Standard `81`
+- `modbus_start`: Standard `0`
+- `modbus_count`: Standard `127`
+- `socket_timeout`: Timeout fuer TCP Verbindungen
+- `debug_logging`: `true` fuer sehr ausfuehrliche Logs, `false` fuer normale Logs (empfohlen)
 
-## Verhalten
+## Was publiziert wird
 
-- Das Add-on liest pro Zyklus genau einen Block per Modbus TCP.
-- Es publiziert rohe Hex-Daten und dekodierte Register aus dem `0x00..0x7E`-Live-Block.
-- Zellspannungen und NTC-Temperaturen werden direkt aus der Registerkarte gelesen.
-- Mehrere Status- und Diagnosewerte werden als Sensoren oder Binary-Sensoren in Home Assistant angelegt.
-
-## Verfuegbare Daten
-
-Unter anderem werden jetzt folgende Werte veroeffentlicht:
-
-- SOC, Packspannung, Strom, Leistung
-- Berechnete Restladung in Ah und direkte Restkapazitaet aus dem BMS
-- Einzelzellspannungen, Min/Max/Differenz, aktive Balance-Zellen
-- Temperatur 1 bis 8 sowie Max/Min/Temperaturdifferenz
-- Charge-, Discharge-, Precharge-, Heat- und Fan-MOS als Binary-Sensoren
-- MOS-, Board- und Heater-Temperatur
-- Backup Current, Limit Current, Cycle Count, BMS Life
-- DI/DO, Wakeup Source, Battery Status, Charge Detect, Load Detect
-- AFE Current, AFE Factor, AFE Offset, AFE ADC, PWM Duty, PWM Voltage
-- Aktive Alarme inklusive Alarmliste als MQTT-Attribute
+- Zellspannungen je Zelle, Min/Max/Diff, aktive Balance-Zellen
+- SOC, Packspannung, Strom, Leistung, Restkapazitaet
+- Temperaturen (1..8), MOS/Board/Heat Temperaturen
+- MOS Zustaende (Charge/Discharge/Precharge/Heat/Fan)
+- Alarmdaten (`error_bytes`) und erweiterte Faults (`new_fault_bytes`)
+- Weitere Diagnosewerte wie AFE, DI/DO, Wakeup Source, Battery Status
 
 ## Installation
 
-1. Dieses Repository als eigenes Add-on-Repository in Home Assistant hinzufuegen.
-2. Das Add-on `WNT/Deye Block Monitor over Modbus TCP` installieren.
-3. Optionen setzen.
-4. Add-on starten.
-5. MQTT Discovery erzeugt die Entitaeten automatisch.
+1. Repository in Home Assistant als Add-on Repository hinzufuegen
+2. Add-on `Daly WNT BMS MQTT Bridge (Waveshare RS485/TCP)` installieren
+3. Optionen konfigurieren
+4. Add-on starten
+5. Entitaeten erscheinen automatisch ueber MQTT Discovery

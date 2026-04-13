@@ -15,8 +15,9 @@ export MODBUS_UNIT_ID=$(bashio::config 'modbus_unit_id')
 export MODBUS_START=$(bashio::config 'modbus_start')
 export MODBUS_COUNT=$(bashio::config 'modbus_count')
 export SOCKET_TIMEOUT=$(bashio::config 'socket_timeout')
+export DEBUG_LOG_ENABLED=$(bashio::config 'debug_logging')
 
-echo "=== WNT/Deye Modbus add-on starting ==="
+echo "=== Daly WNT Modbus add-on starting ==="
 echo "DEVICE=$DEVICE"
 echo "DEVICE_ID=$DEVICE_ID"
 echo "CELL_COUNT=$CELL_COUNT"
@@ -30,5 +31,6 @@ echo "MODBUS_UNIT_ID=$MODBUS_UNIT_ID"
 echo "MODBUS_START=$MODBUS_START"
 echo "MODBUS_COUNT=$MODBUS_COUNT"
 echo "SOCKET_TIMEOUT=$SOCKET_TIMEOUT"
+echo "DEBUG_LOG_ENABLED=$DEBUG_LOG_ENABLED"
 
 exec python3 -u /monitor.py

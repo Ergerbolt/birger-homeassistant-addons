@@ -14,8 +14,19 @@ import paho.mqtt.client as mqtt
 
 print("=== monitor.py started (modbus block mode) ===", flush=True)
 
+
+def env_flag(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+DEBUG_LOG_ENABLED = env_flag("DEBUG_LOG_ENABLED", False)
+LOG_LEVEL = logging.DEBUG if DEBUG_LOG_ENABLED else logging.INFO
+
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=LOG_LEVEL,
     format="%(asctime)s %(levelname)s %(message)s",
     stream=sys.stdout,
 )
@@ -79,7 +90,7 @@ def resolve_connection_target(device: str, default_port: int) -> Tuple[str, int]
 
 CONNECTION_HOST, CONNECTION_PORT = resolve_connection_target(DEVICE, MODBUS_PORT)
 
-log.info("Starting WNT/Deye block monitor")
+log.info("Starting Daly WNT block monitor")
 log.info("DEVICE=%s", DEVICE)
 log.info("DEVICE_ID=%s", DEVICE_ID)
 log.info("CELL_COUNT=%s", CELL_COUNT)
@@ -94,6 +105,7 @@ log.info("MODBUS_START=%s", MODBUS_START)
 log.info("MODBUS_COUNT=%s", MODBUS_COUNT)
 log.info("CONNECTION_HOST=%s", CONNECTION_HOST)
 log.info("CONNECTION_PORT=%s", CONNECTION_PORT)
+log.info("DEBUG_LOG_ENABLED=%s", DEBUG_LOG_ENABLED)
 
 
 client = mqtt.Client(client_id=MQTT_CLIENT_ID)
@@ -1324,7 +1336,7 @@ def publish_cells(block: bytes) -> Optional[dict]:
                 "balancing_active": bool(balance_active_cells) or reg_u16(block, 77) == 1,
             }
         )
-        log.info(
+        log.debug(
             "Cells parsed: min=%.3fV cell=%d max=%.3fV cell=%d diff=%.3fV",
             payload["min"],
             payload["minCell"],
@@ -1382,7 +1394,7 @@ def publish_candidates(block: bytes, cells_payload: Optional[dict] = None):
             "di_state": metrics["di_state"],
             "serial_port_type": metrics["serial_port_type"],
         }
-        log.info("Parsed metrics: %s", state_payload)
+        log.debug("Parsed metrics: %s", state_payload)
         publish(f"{STATE_TOPIC}/state", state_payload)
 
         debug_payload = {
@@ -1508,7 +1520,7 @@ modbus = ModbusTcpClient(CONNECTION_HOST, CONNECTION_PORT, SOCKET_TIMEOUT)
 
 try:
     while True:
-        log.info("Polling WNT/Deye block via Modbus TCP...")
+        log.debug("Polling Daly WNT block via Modbus TCP...")
         frame = modbus.read_holding_registers(MODBUS_UNIT_ID, MODBUS_START, MODBUS_COUNT)
 
         if not frame:
@@ -1522,7 +1534,7 @@ try:
             time.sleep(POLL_INTERVAL_SECONDS)
             continue
 
-        log.info("Parsed fixed block with %d bytes", len(block))
+        log.debug("Parsed fixed block with %d bytes", len(block))
         publish_raw(block)
         cells_payload = publish_cells(block)
         publish_candidates(block, cells_payload)

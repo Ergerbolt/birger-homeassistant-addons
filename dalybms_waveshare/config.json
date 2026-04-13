@@ -1,8 +1,8 @@
 {
-  "name": "WNT/Deye Block Monitor over Modbus TCP",
-  "version": "1.1.14",
+  "name": "Daly WNT BMS MQTT Bridge (Waveshare RS485/TCP)",
+  "version": "1.1.15",
   "slug": "dalybms_waveshare",
-  "description": "Reads a fixed WNT/Deye Modbus TCP block and publishes candidate values to MQTT",
+  "description": "Reads Daly WNT BMS data via Waveshare RS485-to-Ethernet converter and publishes to MQTT for Home Assistant",
   "startup": "application",
   "boot": "auto",
   "init": false,
@@ -26,7 +26,8 @@
     "modbus_unit_id": 81,
     "modbus_start": 0,
     "modbus_count": 127,
-    "socket_timeout": 3
+    "socket_timeout": 3,
+    "debug_logging": false
   },
   "schema": {
     "mqtt_server": "str",
@@ -43,6 +44,7 @@
     "modbus_unit_id": "int(0,255)",
     "modbus_start": "int(0,65535)",
     "modbus_count": "int(1,127)",
-    "socket_timeout": "float"
+    "socket_timeout": "float",
+    "debug_logging": "bool"
   }
 }
