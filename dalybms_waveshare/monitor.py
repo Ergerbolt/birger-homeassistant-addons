@@ -6,8 +6,9 @@ import os
 import socket
 import struct
 import sys
+import threading
 import time
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import urlparse
 
 import paho.mqtt.client as mqtt
@@ -56,6 +57,28 @@ MODBUS_UNIT_ID = int(os.environ.get("MODBUS_UNIT_ID", "81"))
 MODBUS_START = int(os.environ.get("MODBUS_START", "0"))
 MODBUS_COUNT = int(os.environ.get("MODBUS_COUNT", "127"))
 SOCKET_TIMEOUT = float(os.environ.get("SOCKET_TIMEOUT", "3"))
+ENABLE_WRITE_COMMANDS = env_flag("ENABLE_WRITE_COMMANDS", False)
+WRITE_COMMAND_TOPIC = os.environ.get("WRITE_COMMAND_TOPIC", "").strip()
+WRITE_RESULT_TOPIC = os.environ.get("WRITE_RESULT_TOPIC", "").strip()
+WRITE_ALLOWED_REGISTERS_RAW = os.environ.get(
+    "WRITE_ALLOWED_REGISTERS",
+    "265,266,267,268,289,290,320,321,325,326,503,504",
+).strip()
+
+DEFAULT_WRITE_ALLOWED_REGISTERS = {
+    265,
+    266,
+    267,
+    268,
+    289,
+    290,
+    320,
+    321,
+    325,
+    326,
+    503,
+    504,
+}
 
 
 def resolve_connection_target(device: str, default_port: int) -> Tuple[str, int]:
@@ -88,6 +111,25 @@ def resolve_connection_target(device: str, default_port: int) -> Tuple[str, int]
     return host, default_port
 
 
+def parse_allowed_write_registers(raw_value: str) -> Set[int]:
+    allowed: Set[int] = set()
+    for token in raw_value.replace(";", ",").split(","):
+        value = token.strip()
+        if not value:
+            continue
+        if not value.isdigit():
+            log.warning("Ignoring invalid write register token: %r", token)
+            continue
+        register = int(value)
+        if not 0 <= register <= 65535:
+            log.warning("Ignoring out-of-range write register: %s", register)
+            continue
+        allowed.add(register)
+    if not allowed:
+        return set(DEFAULT_WRITE_ALLOWED_REGISTERS)
+    return allowed
+
+
 CONNECTION_HOST, CONNECTION_PORT = resolve_connection_target(DEVICE, MODBUS_PORT)
 
 log.info("Starting Daly WNT block monitor")
@@ -106,28 +148,10 @@ log.info("Modbus target configured")
 log.info("CONNECTION_PORT=%s", CONNECTION_PORT)
 log.info("DEBUG_LOG_ENABLED=%s", DEBUG_LOG_ENABLED)
 
-
-client = mqtt.Client(client_id=MQTT_CLIENT_ID)
-client.username_pw_set(MQTT_USER, MQTT_PASS)
-
-
-def on_connect(client, userdata, flags, rc):
-    log.info("MQTT connected with result code: %s", rc)
-
-
-def on_disconnect(client, userdata, rc):
-    log.warning("MQTT disconnected with result code: %s", rc)
-
-
-client.on_connect = on_connect
-client.on_disconnect = on_disconnect
-
-log.info("Connecting to MQTT broker...")
-client.connect(MQTT_SERVER)
-client.loop_start()
-
 BASE_TOPIC = f"{MQTT_DISCOVERY_PREFIX}/sensor/"
 BINARY_BASE_TOPIC = f"{MQTT_DISCOVERY_PREFIX}/binary_sensor/"
+SWITCH_BASE_TOPIC = f"{MQTT_DISCOVERY_PREFIX}/switch/"
+NUMBER_BASE_TOPIC = f"{MQTT_DISCOVERY_PREFIX}/number/"
 STATE_TOPIC = f"{BASE_TOPIC}{DEVICE_ID}"
 STATUS_TOPIC = f"{STATE_TOPIC}_status"
 CELLS_TOPIC = f"{STATE_TOPIC}_balance"
@@ -135,6 +159,88 @@ TEMP_TOPIC = f"{STATE_TOPIC}_temp"
 MOS_TOPIC = f"{STATE_TOPIC}_mos"
 RAW_TOPIC = f"{STATE_TOPIC}_raw"
 DEBUG_TOPIC = f"{STATE_TOPIC}_debug"
+CONTROL_TOPIC = f"{STATE_TOPIC}_control"
+
+REG_RATED_CAPACITY_HIGH = 265
+REG_RATED_CAPACITY_LOW = 266
+REG_ACTUAL_CAPACITY_HIGH = 267
+REG_ACTUAL_CAPACITY_LOW = 268
+REG_CHARGE_MOS_CONTROL = 289
+REG_DISCHARGE_MOS_CONTROL = 290
+REG_MAX_CHARGE_CURRENT_LEVEL_1 = 320
+REG_MAX_CHARGE_CURRENT_LEVEL_2 = 321
+REG_MAX_DISCHARGE_CURRENT_LEVEL_1 = 325
+REG_MAX_DISCHARGE_CURRENT_LEVEL_2 = 326
+
+CONTROL_REG_START = REG_RATED_CAPACITY_HIGH
+CONTROL_REG_END = REG_MAX_DISCHARGE_CURRENT_LEVEL_2
+CONTROL_REG_COUNT = CONTROL_REG_END - CONTROL_REG_START + 1
+
+CHARGE_MOS_SET_TOPIC = f"{STATE_TOPIC}/set/charge_mos_control"
+DISCHARGE_MOS_SET_TOPIC = f"{STATE_TOPIC}/set/discharge_mos_control"
+RATED_CAPACITY_SET_TOPIC = f"{STATE_TOPIC}/set/rated_capacity_ah"
+ACTUAL_CAPACITY_SET_TOPIC = f"{STATE_TOPIC}/set/actual_capacity_ah"
+MAX_CHARGE_CURRENT_LEVEL_1_SET_TOPIC = f"{STATE_TOPIC}/set/max_charge_current_level_1"
+MAX_CHARGE_CURRENT_LEVEL_2_SET_TOPIC = f"{STATE_TOPIC}/set/max_charge_current_level_2"
+MAX_DISCHARGE_CURRENT_LEVEL_1_SET_TOPIC = f"{STATE_TOPIC}/set/max_discharge_current_level_1"
+MAX_DISCHARGE_CURRENT_LEVEL_2_SET_TOPIC = f"{STATE_TOPIC}/set/max_discharge_current_level_2"
+
+if not WRITE_COMMAND_TOPIC:
+    WRITE_COMMAND_TOPIC = f"{STATE_TOPIC}/set/write"
+if not WRITE_RESULT_TOPIC:
+    WRITE_RESULT_TOPIC = f"{STATE_TOPIC}/write_result"
+ALLOWED_WRITE_REGISTERS = parse_allowed_write_registers(WRITE_ALLOWED_REGISTERS_RAW)
+
+log.info("ENABLE_WRITE_COMMANDS=%s", ENABLE_WRITE_COMMANDS)
+if ENABLE_WRITE_COMMANDS:
+    log.info("WRITE_COMMAND_TOPIC=%s", WRITE_COMMAND_TOPIC)
+    log.info("WRITE_RESULT_TOPIC=%s", WRITE_RESULT_TOPIC)
+    log.info("WRITE_ALLOWED_REGISTERS=%s", sorted(ALLOWED_WRITE_REGISTERS))
+
+
+client = mqtt.Client(client_id=MQTT_CLIENT_ID)
+client.username_pw_set(MQTT_USER, MQTT_PASS)
+modbus: Optional["ModbusTcpClient"] = None
+
+
+def on_connect(client, userdata, flags, rc):
+    log.info("MQTT connected with result code: %s", rc)
+    if rc == 0 and ENABLE_WRITE_COMMANDS:
+        command_topics = [
+            WRITE_COMMAND_TOPIC,
+            CHARGE_MOS_SET_TOPIC,
+            DISCHARGE_MOS_SET_TOPIC,
+            RATED_CAPACITY_SET_TOPIC,
+            ACTUAL_CAPACITY_SET_TOPIC,
+            MAX_CHARGE_CURRENT_LEVEL_1_SET_TOPIC,
+            MAX_CHARGE_CURRENT_LEVEL_2_SET_TOPIC,
+            MAX_DISCHARGE_CURRENT_LEVEL_1_SET_TOPIC,
+            MAX_DISCHARGE_CURRENT_LEVEL_2_SET_TOPIC,
+        ]
+        for topic in command_topics:
+            result, mid = client.subscribe(topic, qos=0)
+            log.info("Subscribed command topic=%s result=%s mid=%s", topic, result, mid)
+
+
+def on_disconnect(client, userdata, rc):
+    log.warning("MQTT disconnected with result code: %s", rc)
+
+
+def on_message(client, userdata, message):
+    if not ENABLE_WRITE_COMMANDS:
+        return
+    if message.retain:
+        log.warning("Ignoring retained command on topic=%s", message.topic)
+        return
+    if message.topic == WRITE_COMMAND_TOPIC:
+        handle_mqtt_write_command(message.payload)
+        return
+    handle_simple_control_command(message.topic, message.payload)
+
+
+client.on_connect = on_connect
+client.on_disconnect = on_disconnect
+client.on_message = on_message
 
 ALARM_TEXTS = [
     "Single overcharge alarm",
@@ -357,6 +463,70 @@ def build_binary_sensor_discovery(
     }
     if entity_category is not None:
         payload["entity_category"] = entity_category
+    if icon is not None:
+        payload["icon"] = icon
+    return payload
+
+
+def build_switch_discovery(
+    name: str,
+    unique_suffix: str,
+    state_topic: str,
+    state_field: str,
+    command_topic: str,
+    device: dict,
+    *,
+    icon: Optional[str] = None,
+) -> dict:
+    payload = {
+        "name": name,
+        "unique_id": f"{DEVICE_ID}_{unique_suffix}",
+        "state_topic": state_topic,
+        "command_topic": command_topic,
+        "value_template": f"{{{{ 'ON' if value_json.{state_field} else 'OFF' }}}}",
+        "state_on": "ON",
+        "state_off": "OFF",
+        "payload_on": "ON",
+        "payload_off": "OFF",
+        "device": device,
+    }
+    if icon is not None:
+        payload["icon"] = icon
+    return payload
+
+
+def build_number_discovery(
+    name: str,
+    unique_suffix: str,
+    state_topic: str,
+    state_field: str,
+    command_topic: str,
+    device: dict,
+    *,
+    unit: Optional[str] = None,
+    min_value: float = 0.0,
+    max_value: float = 1000.0,
+    step: float = 1.0,
+    suggested_display_precision: Optional[int] = None,
+    icon: Optional[str] = None,
+) -> dict:
+    payload = {
+        "name": name,
+        "unique_id": f"{DEVICE_ID}_{unique_suffix}",
+        "state_topic": state_topic,
+        "command_topic": command_topic,
+        "value_template": f"{{{{ value_json.{state_field} }}}}",
+        "command_template": "{{ value }}",
+        "min": min_value,
+        "max": max_value,
+        "step": step,
+        "mode": "box",
+        "device": device,
+    }
+    if unit is not None:
+        payload["unit_of_measurement"] = unit
+    if suggested_display_precision is not None:
+        payload["suggested_display_precision"] = suggested_display_precision
     if icon is not None:
         payload["icon"] = icon
     return payload
@@ -870,6 +1040,114 @@ def publish_discovery():
             suggested_display_precision=1,
         )
 
+    if ENABLE_WRITE_COMMANDS:
+        discovery[f"{SWITCH_BASE_TOPIC}{DEVICE_ID}_charge_mos_control/config"] = build_switch_discovery(
+            "Charge MOS Control",
+            "charge_mos_control",
+            f"{CONTROL_TOPIC}/state",
+            "charge_mos_control",
+            CHARGE_MOS_SET_TOPIC,
+            device_conf,
+            icon="mdi:car-battery",
+        )
+        discovery[f"{SWITCH_BASE_TOPIC}{DEVICE_ID}_discharge_mos_control/config"] = build_switch_discovery(
+            "Discharge MOS Control",
+            "discharge_mos_control",
+            f"{CONTROL_TOPIC}/state",
+            "discharge_mos_control",
+            DISCHARGE_MOS_SET_TOPIC,
+            device_conf,
+            icon="mdi:car-battery",
+        )
+        discovery[f"{NUMBER_BASE_TOPIC}{DEVICE_ID}_rated_capacity_ah/config"] = build_number_discovery(
+            "Rated Capacity",
+            "rated_capacity_ah",
+            f"{CONTROL_TOPIC}/state",
+            "rated_capacity_ah",
+            RATED_CAPACITY_SET_TOPIC,
+            device_conf,
+            unit="Ah",
+            min_value=0.0,
+            max_value=10000.0,
+            step=0.1,
+            suggested_display_precision=1,
+            icon="mdi:battery-high",
+        )
+        discovery[f"{NUMBER_BASE_TOPIC}{DEVICE_ID}_actual_capacity_ah/config"] = build_number_discovery(
+            "Actual Capacity",
+            "actual_capacity_ah",
+            f"{CONTROL_TOPIC}/state",
+            "actual_capacity_ah",
+            ACTUAL_CAPACITY_SET_TOPIC,
+            device_conf,
+            unit="Ah",
+            min_value=0.0,
+            max_value=10000.0,
+            step=0.1,
+            suggested_display_precision=1,
+            icon="mdi:battery-70",
+        )
+        discovery[f"{NUMBER_BASE_TOPIC}{DEVICE_ID}_max_charge_current_level_1/config"] = build_number_discovery(
+            "Max Charge Current L1",
+            "max_charge_current_level_1",
+            f"{CONTROL_TOPIC}/state",
+            "max_charge_current_level_1",
+            MAX_CHARGE_CURRENT_LEVEL_1_SET_TOPIC,
+            device_conf,
+            unit="A",
+            min_value=0.1,
+            max_value=3000.0,
+            step=0.1,
+            suggested_display_precision=1,
+            icon="mdi:current-dc",
+        )
+        discovery[f"{NUMBER_BASE_TOPIC}{DEVICE_ID}_max_charge_current_level_2/config"] = build_number_discovery(
+            "Max Charge Current L2",
+            "max_charge_current_level_2",
+            f"{CONTROL_TOPIC}/state",
+            "max_charge_current_level_2",
+            MAX_CHARGE_CURRENT_LEVEL_2_SET_TOPIC,
+            device_conf,
+            unit="A",
+            min_value=0.1,
+            max_value=3000.0,
+            step=0.1,
+            suggested_display_precision=1,
+            icon="mdi:current-dc",
+        )
+        discovery[
+            f"{NUMBER_BASE_TOPIC}{DEVICE_ID}_max_discharge_current_level_1/config"
+        ] = build_number_discovery(
+            "Max Discharge Current L1",
+            "max_discharge_current_level_1",
+            f"{CONTROL_TOPIC}/state",
+            "max_discharge_current_level_1",
+            MAX_DISCHARGE_CURRENT_LEVEL_1_SET_TOPIC,
+            device_conf,
+            unit="A",
+            min_value=0.1,
+            max_value=3000.0,
+            step=0.1,
+            suggested_display_precision=1,
+            icon="mdi:current-dc",
+        )
+        discovery[
+            f"{NUMBER_BASE_TOPIC}{DEVICE_ID}_max_discharge_current_level_2/config"
+        ] = build_number_discovery(
+            "Max Discharge Current L2",
+            "max_discharge_current_level_2",
+            f"{CONTROL_TOPIC}/state",
+            "max_discharge_current_level_2",
+            MAX_DISCHARGE_CURRENT_LEVEL_2_SET_TOPIC,
+            device_conf,
+            unit="A",
+            min_value=0.1,
+            max_value=3000.0,
+            step=0.1,
+            suggested_display_precision=1,
+            icon="mdi:current-dc",
+        )
+
     deprecated_discovery_topics = [
         f"{STATE_TOPIC}_afe_current/config",
         f"{STATE_TOPIC}_afe_factor/config",
@@ -900,57 +1178,145 @@ class ModbusTcpClient:
         self.port = port
         self.timeout = timeout
         self.tx_id = 1
+        self._lock = threading.Lock()
 
     def read_holding_registers(self, unit_id: int, start: int, count: int) -> Optional[bytes]:
-        tx_id = self.tx_id & 0xFFFF
-        self.tx_id += 1
-
         pdu = struct.pack(">BHH", 0x03, start, count)
-        mbap = struct.pack(">HHHB", tx_id, 0, len(pdu) + 1, unit_id)
-        request = mbap + pdu
-
-        log.debug("Modbus TX: %s", hexdump(request))
-
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(self.timeout)
-
-        try:
-            sock.connect((self.host, self.port))
-            sock.sendall(request)
-
-            header = self._recv_exact(sock, 7)
-            if not header:
-                log.warning("No MBAP header received")
-                return None
-
-            log.debug("Modbus RX header: %s", hexdump(header))
-
-            rx_tx_id, proto_id, length, unit = struct.unpack(">HHHB", header)
-            if rx_tx_id != tx_id:
-                log.warning("Unexpected transaction id: tx=%s rx=%s", tx_id, rx_tx_id)
-            if proto_id != 0:
-                log.warning("Unexpected proto_id=%s", proto_id)
-            if unit != unit_id:
-                log.warning("Unexpected unit id: tx=%s rx=%s", unit_id, unit)
-
-            payload_len = length - 1
-            payload = self._recv_exact(sock, payload_len)
-            if payload is None:
-                log.warning("No Modbus payload received")
-                return None
-
-            full = header + payload
-            log.debug("Modbus RX full (%d bytes): %s", len(full), hexdump(full))
-            return full
-
-        except Exception:
-            log.exception("Modbus TCP request failed")
+        frame = self._exchange(unit_id, pdu)
+        if not frame:
             return None
-        finally:
+        payload = frame[7:]
+        if not payload:
+            log.warning("Read response payload is empty")
+            return None
+        if payload[0] == 0x83:
+            exception_code = payload[1] if len(payload) > 1 else None
+            log.warning("Modbus exception on read (0x03): code=%s", exception_code)
+            return None
+        if payload[0] != 0x03:
+            log.warning("Unexpected function in read response: 0x%02X", payload[0])
+            return None
+        return frame
+
+    def write_single_register(self, unit_id: int, register: int, value: int) -> bool:
+        pdu = struct.pack(">BHH", 0x06, register, value)
+        frame = self._exchange(unit_id, pdu)
+        if not frame:
+            return False
+
+        payload = frame[7:]
+        if len(payload) < 5:
+            log.warning("Short write response for 0x06: %s", hexdump(payload))
+            return False
+        if payload[0] == 0x86:
+            exception_code = payload[1]
+            log.warning("Modbus exception on write single (0x06): code=%s", exception_code)
+            return False
+        if payload[0] != 0x06:
+            log.warning("Unexpected function in write single response: 0x%02X", payload[0])
+            return False
+
+        rx_register, rx_value = struct.unpack(">HH", payload[1:5])
+        if rx_register != register or rx_value != value:
+            log.warning(
+                "Write single echo mismatch: register tx=%s rx=%s value tx=%s rx=%s",
+                register,
+                rx_register,
+                value,
+                rx_value,
+            )
+            return False
+        return True
+
+    def write_multiple_registers(self, unit_id: int, start_register: int, values: List[int]) -> bool:
+        if not values:
+            log.warning("write_multiple_registers called without values")
+            return False
+
+        count = len(values)
+        data = b"".join(struct.pack(">H", value) for value in values)
+        pdu = struct.pack(">BHHB", 0x10, start_register, count, len(data)) + data
+        frame = self._exchange(unit_id, pdu)
+        if not frame:
+            return False
+
+        payload = frame[7:]
+        if len(payload) < 5:
+            log.warning("Short write response for 0x10: %s", hexdump(payload))
+            return False
+        if payload[0] == 0x90:
+            exception_code = payload[1]
+            log.warning("Modbus exception on write multiple (0x10): code=%s", exception_code)
+            return False
+        if payload[0] != 0x10:
+            log.warning("Unexpected function in write multiple response: 0x%02X", payload[0])
+            return False
+
+        rx_start, rx_count = struct.unpack(">HH", payload[1:5])
+        if rx_start != start_register or rx_count != count:
+            log.warning(
+                "Write multiple echo mismatch: start tx=%s rx=%s count tx=%s rx=%s",
+                start_register,
+                rx_start,
+                count,
+                rx_count,
+            )
+            return False
+        return True
+
+    def _exchange(self, unit_id: int, pdu: bytes) -> Optional[bytes]:
+        with self._lock:
+            tx_id = self.tx_id & 0xFFFF
+            self.tx_id += 1
+
+            mbap = struct.pack(">HHHB", tx_id, 0, len(pdu) + 1, unit_id)
+            request = mbap + pdu
+
+            log.debug("Modbus TX: %s", hexdump(request))
+
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(self.timeout)
+
             try:
-                sock.close()
+                sock.connect((self.host, self.port))
+                sock.sendall(request)
+
+                header = self._recv_exact(sock, 7)
+                if not header:
+                    log.warning("No MBAP header received")
+                    return None
+
+                log.debug("Modbus RX header: %s", hexdump(header))
+
+                rx_tx_id, proto_id, length, rx_unit = struct.unpack(">HHHB", header)
+                if rx_tx_id != tx_id:
+                    log.warning("Unexpected transaction id: tx=%s rx=%s", tx_id, rx_tx_id)
+                if proto_id != 0:
+                    log.warning("Unexpected proto_id=%s", proto_id)
+                if rx_unit != unit_id:
+                    log.warning("Unexpected unit id: tx=%s rx=%s", unit_id, rx_unit)
+                if length <= 0:
+                    log.warning("Invalid MBAP length=%s", length)
+                    return None
+
+                payload_len = length - 1
+                payload = self._recv_exact(sock, payload_len)
+                if payload is None:
+                    log.warning("No Modbus payload received")
+                    return None
+
+                full = header + payload
+                log.debug("Modbus RX full (%d bytes): %s", len(full), hexdump(full))
+                return full
+
             except Exception:
-                pass
+                log.exception("Modbus TCP request failed")
+                return None
+            finally:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
 
     def _recv_exact(self, sock: socket.socket, n: int) -> Optional[bytes]:
         buf = b""
@@ -960,6 +1326,360 @@ class ModbusTcpClient:
                 return None
             buf += chunk
         return buf
+
+
+def publish_write_result(payload: dict):
+    publish(WRITE_RESULT_TOPIC, payload, retain=False)
+
+
+def parse_write_command_payload(payload_bytes: bytes) -> Tuple[Optional[dict], Optional[str]]:
+    try:
+        payload = json.loads(payload_bytes.decode("utf-8"))
+    except Exception:
+        return None, "invalid JSON payload"
+
+    if not isinstance(payload, dict):
+        return None, "payload must be a JSON object"
+
+    register = payload.get("register")
+    if isinstance(register, bool) or not isinstance(register, int):
+        return None, "field 'register' must be an integer"
+    if not 0 <= register <= 65535:
+        return None, "field 'register' must be between 0 and 65535"
+
+    values_field = payload.get("values")
+    value_field = payload.get("value")
+    if values_field is not None and value_field is not None:
+        return None, "use either 'value' or 'values', not both"
+
+    if values_field is not None:
+        if not isinstance(values_field, list) or not values_field:
+            return None, "field 'values' must be a non-empty integer list"
+        if len(values_field) > 123:
+            return None, "field 'values' supports at most 123 registers"
+
+        values: List[int] = []
+        for item in values_field:
+            if isinstance(item, bool) or not isinstance(item, int):
+                return None, "all items in 'values' must be integers"
+            if not 0 <= item <= 65535:
+                return None, "all items in 'values' must be between 0 and 65535"
+            values.append(item)
+
+        for offset in range(len(values)):
+            target_register = register + offset
+            if target_register not in ALLOWED_WRITE_REGISTERS:
+                return None, f"register {target_register} is not allowed for writes"
+
+        return {
+            "register": register,
+            "values": values,
+            "multi_write": True,
+            "request_id": payload.get("request_id"),
+        }, None
+
+    if isinstance(value_field, bool) or not isinstance(value_field, int):
+        return None, "field 'value' must be an integer when 'values' is not provided"
+    if not 0 <= value_field <= 65535:
+        return None, "field 'value' must be between 0 and 65535"
+    if register not in ALLOWED_WRITE_REGISTERS:
+        return None, f"register {register} is not allowed for writes"
+
+    return {
+        "register": register,
+        "values": [value_field],
+        "multi_write": False,
+        "request_id": payload.get("request_id"),
+    }, None
+
+
+def handle_mqtt_write_command(payload_bytes: bytes):
+    timestamp = dt.datetime.now(dt.timezone.utc).isoformat()
+
+    if modbus is None:
+        publish_write_result(
+            {
+                "ok": False,
+                "error": "modbus client is not initialized yet",
+                "timestamp": timestamp,
+            }
+        )
+        return
+
+    command, error = parse_write_command_payload(payload_bytes)
+    if error:
+        log.warning("Rejected write command: %s", error)
+        publish_write_result(
+            {
+                "ok": False,
+                "error": error,
+                "timestamp": timestamp,
+            }
+        )
+        return
+
+    register = command["register"]
+    values = command["values"]
+    request_id = command["request_id"]
+
+    if command["multi_write"]:
+        log.info("Write command 0x10 register=%s values=%s", register, values)
+        ok = modbus.write_multiple_registers(MODBUS_UNIT_ID, register, values)
+        function_code = "0x10"
+    else:
+        log.info("Write command 0x06 register=%s value=%s", register, values[0])
+        ok = modbus.write_single_register(MODBUS_UNIT_ID, register, values[0])
+        function_code = "0x06"
+
+    response: Dict[str, Any] = {
+        "ok": ok,
+        "function": function_code,
+        "register": register,
+        "values": values,
+        "timestamp": timestamp,
+    }
+    if request_id is not None:
+        response["request_id"] = request_id
+    if not ok:
+        response["error"] = "write failed or was rejected by the BMS"
+    publish_write_result(response)
+    if ok:
+        refresh_control_state()
+
+
+def parse_modbus_read_words(frame: bytes, expected_count: int) -> Optional[List[int]]:
+    if not frame or len(frame) < 9:
+        return None
+    payload = frame[7:]
+    if len(payload) < 2:
+        return None
+    if payload[0] != 0x03:
+        return None
+    byte_count = payload[1]
+    expected_bytes = expected_count * 2
+    if byte_count != expected_bytes:
+        return None
+    data = payload[2:]
+    if len(data) < expected_bytes:
+        return None
+    words: List[int] = []
+    for i in range(expected_count):
+        pos = i * 2
+        words.append(int.from_bytes(data[pos : pos + 2], byteorder="big", signed=False))
+    return words
+
+
+def decode_capacity_ah(high_word: int, low_word: int) -> float:
+    raw = (high_word << 16) | low_word
+    return round(raw / 1000.0, 1)
+
+
+def decode_max_charge_current(raw_value: int) -> Optional[float]:
+    if 0 <= raw_value <= 30000:
+        return round((30000.0 - raw_value) / 10.0, 1)
+    return None
+
+
+def decode_max_discharge_current(raw_value: int) -> Optional[float]:
+    if 30000 <= raw_value <= 60000:
+        return round((raw_value - 30000.0) / 10.0, 1)
+    return None
+
+
+def encode_capacity_words(value_ah: float) -> Optional[List[int]]:
+    if value_ah < 0:
+        return None
+    raw = int(round(value_ah * 1000.0))
+    if not 0 <= raw <= 0xFFFFFFFF:
+        return None
+    return [(raw >> 16) & 0xFFFF, raw & 0xFFFF]
+
+
+def encode_max_charge_current(value_a: float) -> Optional[int]:
+    raw = int(round(30000.0 - value_a * 10.0))
+    if not 0 <= raw < 30000:
+        return None
+    return raw
+
+
+def encode_max_discharge_current(value_a: float) -> Optional[int]:
+    raw = int(round(30000.0 + value_a * 10.0))
+    if not 30000 < raw <= 60000:
+        return None
+    return raw
+
+
+def parse_switch_payload(payload_bytes: bytes) -> Optional[bool]:
+    text = payload_bytes.decode("utf-8", errors="ignore").strip().upper()
+    if text in {"ON", "1", "TRUE"}:
+        return True
+    if text in {"OFF", "0", "FALSE"}:
+        return False
+    return None
+
+
+def parse_float_payload(payload_bytes: bytes) -> Optional[float]:
+    text = payload_bytes.decode("utf-8", errors="ignore").strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def read_control_state() -> Optional[dict]:
+    if modbus is None:
+        return None
+    frame = modbus.read_holding_registers(MODBUS_UNIT_ID, CONTROL_REG_START, CONTROL_REG_COUNT)
+    if not frame:
+        return None
+    words = parse_modbus_read_words(frame, CONTROL_REG_COUNT)
+    if words is None:
+        return None
+
+    def reg_value(register: int) -> int:
+        return words[register - CONTROL_REG_START]
+
+    return {
+        "charge_mos_control": reg_value(REG_CHARGE_MOS_CONTROL) == 1,
+        "discharge_mos_control": reg_value(REG_DISCHARGE_MOS_CONTROL) == 1,
+        "rated_capacity_ah": decode_capacity_ah(
+            reg_value(REG_RATED_CAPACITY_HIGH),
+            reg_value(REG_RATED_CAPACITY_LOW),
+        ),
+        "actual_capacity_ah": decode_capacity_ah(
+            reg_value(REG_ACTUAL_CAPACITY_HIGH),
+            reg_value(REG_ACTUAL_CAPACITY_LOW),
+        ),
+        "max_charge_current_level_1": decode_max_charge_current(reg_value(REG_MAX_CHARGE_CURRENT_LEVEL_1)),
+        "max_charge_current_level_2": decode_max_charge_current(reg_value(REG_MAX_CHARGE_CURRENT_LEVEL_2)),
+        "max_discharge_current_level_1": decode_max_discharge_current(reg_value(REG_MAX_DISCHARGE_CURRENT_LEVEL_1)),
+        "max_discharge_current_level_2": decode_max_discharge_current(reg_value(REG_MAX_DISCHARGE_CURRENT_LEVEL_2)),
+    }
+
+
+def publish_control_state(control_state: dict):
+    publish(f"{CONTROL_TOPIC}/state", control_state)
+
+
+def refresh_control_state():
+    if not ENABLE_WRITE_COMMANDS:
+        return
+    state = read_control_state()
+    if state is not None:
+        publish_control_state(state)
+
+
+def handle_simple_control_command(topic: str, payload_bytes: bytes):
+    timestamp = dt.datetime.now(dt.timezone.utc).isoformat()
+    if modbus is None:
+        publish_write_result({"ok": False, "error": "modbus client is not initialized yet", "timestamp": timestamp})
+        return
+
+    ok = False
+    function_code = "0x06"
+    multi_write = False
+    register = None
+    values: List[int] = []
+    error = None
+
+    if topic == CHARGE_MOS_SET_TOPIC:
+        switch_value = parse_switch_payload(payload_bytes)
+        if switch_value is None:
+            error = "invalid payload for charge_mos_control (expected ON/OFF)"
+        else:
+            register = REG_CHARGE_MOS_CONTROL
+            values = [1 if switch_value else 0]
+    elif topic == DISCHARGE_MOS_SET_TOPIC:
+        switch_value = parse_switch_payload(payload_bytes)
+        if switch_value is None:
+            error = "invalid payload for discharge_mos_control (expected ON/OFF)"
+        else:
+            register = REG_DISCHARGE_MOS_CONTROL
+            values = [1 if switch_value else 0]
+    elif topic == RATED_CAPACITY_SET_TOPIC:
+        value_ah = parse_float_payload(payload_bytes)
+        words = encode_capacity_words(value_ah) if value_ah is not None else None
+        if words is None:
+            error = "invalid payload for rated_capacity_ah (expected Ah >= 0)"
+        else:
+            function_code = "0x10"
+            multi_write = True
+            register = REG_RATED_CAPACITY_HIGH
+            values = words
+    elif topic == ACTUAL_CAPACITY_SET_TOPIC:
+        value_ah = parse_float_payload(payload_bytes)
+        words = encode_capacity_words(value_ah) if value_ah is not None else None
+        if words is None:
+            error = "invalid payload for actual_capacity_ah (expected Ah >= 0)"
+        else:
+            function_code = "0x10"
+            multi_write = True
+            register = REG_ACTUAL_CAPACITY_HIGH
+            values = words
+    elif topic == MAX_CHARGE_CURRENT_LEVEL_1_SET_TOPIC:
+        value_a = parse_float_payload(payload_bytes)
+        raw = encode_max_charge_current(value_a) if value_a is not None else None
+        if raw is None:
+            error = "invalid payload for max_charge_current_level_1 (expected A between 0.1 and 3000)"
+        else:
+            register = REG_MAX_CHARGE_CURRENT_LEVEL_1
+            values = [raw]
+    elif topic == MAX_CHARGE_CURRENT_LEVEL_2_SET_TOPIC:
+        value_a = parse_float_payload(payload_bytes)
+        raw = encode_max_charge_current(value_a) if value_a is not None else None
+        if raw is None:
+            error = "invalid payload for max_charge_current_level_2 (expected A between 0.1 and 3000)"
+        else:
+            register = REG_MAX_CHARGE_CURRENT_LEVEL_2
+            values = [raw]
+    elif topic == MAX_DISCHARGE_CURRENT_LEVEL_1_SET_TOPIC:
+        value_a = parse_float_payload(payload_bytes)
+        raw = encode_max_discharge_current(value_a) if value_a is not None else None
+        if raw is None:
+            error = "invalid payload for max_discharge_current_level_1 (expected A between 0.1 and 3000)"
+        else:
+            register = REG_MAX_DISCHARGE_CURRENT_LEVEL_1
+            values = [raw]
+    elif topic == MAX_DISCHARGE_CURRENT_LEVEL_2_SET_TOPIC:
+        value_a = parse_float_payload(payload_bytes)
+        raw = encode_max_discharge_current(value_a) if value_a is not None else None
+        if raw is None:
+            error = "invalid payload for max_discharge_current_level_2 (expected A between 0.1 and 3000)"
+        else:
+            register = REG_MAX_DISCHARGE_CURRENT_LEVEL_2
+            values = [raw]
+    else:
+        return
+
+    if error is None and register is not None:
+        for offset in range(len(values)):
+            if (register + offset) not in ALLOWED_WRITE_REGISTERS:
+                error = f"register {register + offset} is not allowed for writes"
+                ok = False
+                break
+        if error is None:
+            if multi_write:
+                ok = modbus.write_multiple_registers(MODBUS_UNIT_ID, register, values)
+            else:
+                ok = modbus.write_single_register(MODBUS_UNIT_ID, register, values[0])
+
+    response: Dict[str, Any] = {
+        "ok": ok,
+        "function": function_code,
+        "register": register,
+        "values": values,
+        "timestamp": timestamp,
+    }
+    if error is not None:
+        response["ok"] = False
+        response["error"] = error
+    elif not ok:
+        response["error"] = "write failed or was rejected by the BMS"
+    publish_write_result(response)
+    if response["ok"]:
+        refresh_control_state()
 
 
 def parse_modbus_block(frame: bytes) -> Optional[bytes]:
@@ -1455,9 +2175,15 @@ def publish_candidates(block: bytes, cells_payload: Optional[dict] = None):
         log.exception("Failed to publish candidates")
 
 
-publish_discovery()
-
 modbus = ModbusTcpClient(CONNECTION_HOST, CONNECTION_PORT, SOCKET_TIMEOUT)
+
+log.info("Connecting to MQTT broker...")
+client.connect(MQTT_SERVER)
+client.loop_start()
+
+publish_discovery()
+if ENABLE_WRITE_COMMANDS:
+    refresh_control_state()
 
 try:
     while True:
@@ -1479,6 +2205,8 @@ try:
         publish_raw(block)
         cells_payload = publish_cells(block)
         publish_candidates(block, cells_payload)
+        if ENABLE_WRITE_COMMANDS:
+            refresh_control_state()
 
         time.sleep(POLL_INTERVAL_SECONDS)
 

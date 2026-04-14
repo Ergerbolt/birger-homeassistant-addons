@@ -16,6 +16,10 @@ export MODBUS_START=$(bashio::config 'modbus_start')
 export MODBUS_COUNT=$(bashio::config 'modbus_count')
 export SOCKET_TIMEOUT=$(bashio::config 'socket_timeout')
 export DEBUG_LOG_ENABLED=$(bashio::config 'debug_logging')
+export ENABLE_WRITE_COMMANDS=$(bashio::config 'enable_write_commands')
+export WRITE_COMMAND_TOPIC=$(bashio::config 'write_command_topic')
+export WRITE_RESULT_TOPIC=$(bashio::config 'write_result_topic')
+export WRITE_ALLOWED_REGISTERS=$(bashio::config 'write_allowed_registers')
 
 echo "=== Daly WNT Modbus add-on starting ==="
 echo "DEVICE is configured"
@@ -32,5 +36,9 @@ echo "MODBUS_START=$MODBUS_START"
 echo "MODBUS_COUNT=$MODBUS_COUNT"
 echo "SOCKET_TIMEOUT=$SOCKET_TIMEOUT"
 echo "DEBUG_LOG_ENABLED=$DEBUG_LOG_ENABLED"
+echo "ENABLE_WRITE_COMMANDS=$ENABLE_WRITE_COMMANDS"
+echo "WRITE_COMMAND_TOPIC=$WRITE_COMMAND_TOPIC"
+echo "WRITE_RESULT_TOPIC=$WRITE_RESULT_TOPIC"
+echo "WRITE_ALLOWED_REGISTERS=$WRITE_ALLOWED_REGISTERS"
 
 exec python3 -u /monitor.py

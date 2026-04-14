@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.1.20
+- Added Home Assistant MQTT control entities when `enable_write_commands=true`:
+  - `Charge MOS Control` / `Discharge MOS Control` switches
+  - `Rated Capacity` / `Actual Capacity` numbers
+  - `Max Charge Current L1/L2` and `Max Discharge Current L1/L2` numbers
+- Added automatic readback/publish of control register state from Modbus block `265..326`.
+- Added payload decoding/encoding for current and capacity writes to match BMSTool register format.
+- Expanded default write allowlist to include control and parameter registers.
+
+## 1.1.19
+- Added optional Modbus write command support via MQTT.
+- Added safe write allowlist (`write_allowed_registers`, default `290,503,504`).
+- Added write command/result topics (`write_command_topic`, `write_result_topic`) with automatic defaults.
+- Added Modbus TCP function `0x06` (single register write) and `0x10` (multiple register write).
+- Added thread-safe Modbus request handling so read polling and writes do not collide.
+
 ## 1.1.18
 - Fixed Docker build issue by adding a default value for `BUILD_FROM`.
 - Improved package install fallback for `paho-mqtt`.

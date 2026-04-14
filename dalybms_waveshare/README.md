@@ -3,8 +3,13 @@
 Dieses Add-on verbindet ein Daly WNT Board ueber RS485 mit Home Assistant.
 Die Verbindung laeuft ueber einen Waveshare RS485-to-RJ45 Ethernet Converter (TCP/IP zu Serial).
 Das Add-on liest den festen Live-Datenblock per Modbus TCP und publiziert die dekodierten Werte per MQTT Discovery.
+Optional kann es gezielte Modbus-Schreibbefehle per MQTT an das BMS senden.
 
 Hinweis: Kein Deye-Inverter-Addon. Der Wechselrichter ist hier nicht beteiligt.
+
+## Haftungsausschluss
+
+Die Nutzung dieses Add-ons erfolgt auf eigene Gefahr. Schreibzugriffe auf BMS-Parameter koennen Fehlkonfigurationen verursachen und im schlimmsten Fall zu Beschaedigungen von Batterie, BMS oder angeschlossener Hardware fuehren.
 
 ## Hardware-Setup
 
@@ -29,6 +34,45 @@ Hinweis: Kein Deye-Inverter-Addon. Der Wechselrichter ist hier nicht beteiligt.
 - `modbus_count`: Standard `127`
 - `socket_timeout`: Timeout fuer TCP Verbindungen
 - `debug_logging`: `true` fuer sehr ausfuehrliche Logs, `false` fuer normale Logs (empfohlen)
+- `enable_write_commands`: aktiviert MQTT-basierte Modbus-Write-Kommandos (`false` empfohlen als Default)
+- `write_command_topic`: optionales MQTT Topic fuer Write-Kommandos (leer = auto)
+- `write_result_topic`: optionales MQTT Topic fuer Write-Antworten (leer = auto)
+- `write_allowed_registers`: CSV-Registerliste, die geschrieben werden darf (Default `265,266,267,268,289,290,320,321,325,326,503,504`)
+
+## Schreibbefehle (optional)
+
+Wenn `enable_write_commands=true` ist, lauscht das Add-on standardmaessig auf:
+
+- Command Topic: `homeassistant/sensor/<device_id>/set/write`
+- Result Topic: `homeassistant/sensor/<device_id>/write_result`
+
+Zusaetzlich werden in Home Assistant steuerbare Entitaeten per MQTT Discovery angelegt:
+
+- Switch: `Charge MOS Control` (Register `289`)
+- Switch: `Discharge MOS Control` (Register `290`)
+- Number: `Rated Capacity` in `Ah` (Register `265/266`, 32-bit)
+- Number: `Actual Capacity` in `Ah` (Register `267/268`, 32-bit)
+- Number: `Max Charge Current L1/L2` in `A` (Register `320/321`)
+- Number: `Max Discharge Current L1/L2` in `A` (Register `325/326`)
+
+Unterstuetzte Formate:
+
+```json
+{"register":503,"value":1}
+```
+
+```json
+{"register":503,"values":[1,0]}
+```
+
+Hinweise:
+
+- `value` nutzt Modbus Funktion `0x06` (Single Register Write).
+- `values` nutzt Modbus Funktion `0x10` (Multi Register Write).
+- Registers ausserhalb von `write_allowed_registers` werden abgewiesen.
+- Jede Antwort enthaelt `ok`, `function`, `register`, `values`, `timestamp` und optional `error`.
+- Stromgrenzen werden intern wie im BMSTool kodiert (`30000 +/- A*10`).
+- Kapazitaet wird intern als `Ah * 1000` im 32-bit Registerpaar geschrieben.
 
 ## Was publiziert wird
 
