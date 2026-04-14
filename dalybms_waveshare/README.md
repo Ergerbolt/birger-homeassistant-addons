@@ -37,7 +37,7 @@ Die Nutzung dieses Add-ons erfolgt auf eigene Gefahr. Schreibzugriffe auf BMS-Pa
 - `enable_write_commands`: aktiviert MQTT-basierte Modbus-Write-Kommandos (`false` empfohlen als Default)
 - `write_command_topic`: optionales MQTT Topic fuer Write-Kommandos (leer = auto)
 - `write_result_topic`: optionales MQTT Topic fuer Write-Antworten (leer = auto)
-- `write_allowed_registers`: CSV-Registerliste, die geschrieben werden darf (Default `265,266,267,268,289,290,320,321,325,326,503,504`)
+- `write_allowed_registers`: CSV-Registerliste, die geschrieben werden darf (Default `9,10,11,12,33,34,64,65,69,70,265,266,267,268,289,290,320,321,325,326,503,504`)
 
 ## Schreibbefehle (optional)
 
@@ -73,6 +73,7 @@ Hinweise:
 - Jede Antwort enthaelt `ok`, `function`, `register`, `values`, `timestamp` und optional `error`.
 - Stromgrenzen werden intern wie im BMSTool kodiert (`30000 +/- A*10`).
 - Kapazitaet wird intern als `Ah * 1000` im 32-bit Registerpaar geschrieben.
+- Fuer unterschiedliche Firmware-Varianten versucht das Add-on automatisch Register mit und ohne `+256` Offset.
 
 ## Was publiziert wird
 

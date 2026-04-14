@@ -62,10 +62,20 @@ WRITE_COMMAND_TOPIC = os.environ.get("WRITE_COMMAND_TOPIC", "").strip()
 WRITE_RESULT_TOPIC = os.environ.get("WRITE_RESULT_TOPIC", "").strip()
 WRITE_ALLOWED_REGISTERS_RAW = os.environ.get(
     "WRITE_ALLOWED_REGISTERS",
-    "265,266,267,268,289,290,320,321,325,326,503,504",
+    "9,10,11,12,33,34,64,65,69,70,265,266,267,268,289,290,320,321,325,326,503,504",
 ).strip()
 
 DEFAULT_WRITE_ALLOWED_REGISTERS = {
+    9,
+    10,
+    11,
+    12,
+    33,
+    34,
+    64,
+    65,
+    69,
+    70,
     265,
     266,
     267,
@@ -172,9 +182,24 @@ REG_MAX_CHARGE_CURRENT_LEVEL_2 = 321
 REG_MAX_DISCHARGE_CURRENT_LEVEL_1 = 325
 REG_MAX_DISCHARGE_CURRENT_LEVEL_2 = 326
 
+REG_RATED_CAPACITY_HIGH_BASE = 9
+REG_RATED_CAPACITY_LOW_BASE = 10
+REG_ACTUAL_CAPACITY_HIGH_BASE = 11
+REG_ACTUAL_CAPACITY_LOW_BASE = 12
+REG_CHARGE_MOS_CONTROL_BASE = 33
+REG_DISCHARGE_MOS_CONTROL_BASE = 34
+REG_MAX_CHARGE_CURRENT_LEVEL_1_BASE = 64
+REG_MAX_CHARGE_CURRENT_LEVEL_2_BASE = 65
+REG_MAX_DISCHARGE_CURRENT_LEVEL_1_BASE = 69
+REG_MAX_DISCHARGE_CURRENT_LEVEL_2_BASE = 70
+
 CONTROL_REG_START = REG_RATED_CAPACITY_HIGH
 CONTROL_REG_END = REG_MAX_DISCHARGE_CURRENT_LEVEL_2
 CONTROL_REG_COUNT = CONTROL_REG_END - CONTROL_REG_START + 1
+
+CONTROL_REG_START_BASE = REG_RATED_CAPACITY_HIGH_BASE
+CONTROL_REG_END_BASE = REG_MAX_DISCHARGE_CURRENT_LEVEL_2_BASE
+CONTROL_REG_COUNT_BASE = CONTROL_REG_END_BASE - CONTROL_REG_START_BASE + 1
 
 CHARGE_MOS_SET_TOPIC = f"{STATE_TOPIC}/set/charge_mos_control"
 DISCHARGE_MOS_SET_TOPIC = f"{STATE_TOPIC}/set/discharge_mos_control"
@@ -201,6 +226,7 @@ if ENABLE_WRITE_COMMANDS:
 client = mqtt.Client(client_id=MQTT_CLIENT_ID)
 client.username_pw_set(MQTT_USER, MQTT_PASS)
 modbus: Optional["ModbusTcpClient"] = None
+active_control_profile = "offset"
 
 
 def on_connect(client, userdata, flags, rc):
@@ -1528,35 +1554,134 @@ def parse_float_payload(payload_bytes: bytes) -> Optional[float]:
         return None
 
 
-def read_control_state() -> Optional[dict]:
+def _profile_order() -> List[str]:
+    if active_control_profile == "base":
+        return ["base", "offset"]
+    return ["offset", "base"]
+
+
+def _register_candidates(offset_register: int, base_register: int) -> List[int]:
+    if active_control_profile == "base":
+        return [base_register, offset_register]
+    return [offset_register, base_register]
+
+
+def _update_active_control_profile(profile: str):
+    global active_control_profile
+    if profile != active_control_profile:
+        log.info("Control register profile switched to: %s", profile)
+        active_control_profile = profile
+
+
+def _read_control_state_for_profile(profile: str) -> Optional[dict]:
     if modbus is None:
         return None
-    frame = modbus.read_holding_registers(MODBUS_UNIT_ID, CONTROL_REG_START, CONTROL_REG_COUNT)
+
+    if profile == "offset":
+        start = CONTROL_REG_START
+        count = CONTROL_REG_COUNT
+        reg_charge = REG_CHARGE_MOS_CONTROL
+        reg_discharge = REG_DISCHARGE_MOS_CONTROL
+        reg_rated_high = REG_RATED_CAPACITY_HIGH
+        reg_rated_low = REG_RATED_CAPACITY_LOW
+        reg_actual_high = REG_ACTUAL_CAPACITY_HIGH
+        reg_actual_low = REG_ACTUAL_CAPACITY_LOW
+        reg_chg_l1 = REG_MAX_CHARGE_CURRENT_LEVEL_1
+        reg_chg_l2 = REG_MAX_CHARGE_CURRENT_LEVEL_2
+        reg_dsg_l1 = REG_MAX_DISCHARGE_CURRENT_LEVEL_1
+        reg_dsg_l2 = REG_MAX_DISCHARGE_CURRENT_LEVEL_2
+    else:
+        start = CONTROL_REG_START_BASE
+        count = CONTROL_REG_COUNT_BASE
+        reg_charge = REG_CHARGE_MOS_CONTROL_BASE
+        reg_discharge = REG_DISCHARGE_MOS_CONTROL_BASE
+        reg_rated_high = REG_RATED_CAPACITY_HIGH_BASE
+        reg_rated_low = REG_RATED_CAPACITY_LOW_BASE
+        reg_actual_high = REG_ACTUAL_CAPACITY_HIGH_BASE
+        reg_actual_low = REG_ACTUAL_CAPACITY_LOW_BASE
+        reg_chg_l1 = REG_MAX_CHARGE_CURRENT_LEVEL_1_BASE
+        reg_chg_l2 = REG_MAX_CHARGE_CURRENT_LEVEL_2_BASE
+        reg_dsg_l1 = REG_MAX_DISCHARGE_CURRENT_LEVEL_1_BASE
+        reg_dsg_l2 = REG_MAX_DISCHARGE_CURRENT_LEVEL_2_BASE
+
+    frame = modbus.read_holding_registers(MODBUS_UNIT_ID, start, count)
     if not frame:
         return None
-    words = parse_modbus_read_words(frame, CONTROL_REG_COUNT)
+    words = parse_modbus_read_words(frame, count)
     if words is None:
         return None
 
     def reg_value(register: int) -> int:
-        return words[register - CONTROL_REG_START]
+        return words[register - start]
+
+    charge_raw = reg_value(reg_charge)
+    discharge_raw = reg_value(reg_discharge)
+    if charge_raw not in (0, 1) or discharge_raw not in (0, 1):
+        return None
 
     return {
-        "charge_mos_control": reg_value(REG_CHARGE_MOS_CONTROL) == 1,
-        "discharge_mos_control": reg_value(REG_DISCHARGE_MOS_CONTROL) == 1,
+        "charge_mos_control": charge_raw == 1,
+        "discharge_mos_control": discharge_raw == 1,
         "rated_capacity_ah": decode_capacity_ah(
-            reg_value(REG_RATED_CAPACITY_HIGH),
-            reg_value(REG_RATED_CAPACITY_LOW),
+            reg_value(reg_rated_high),
+            reg_value(reg_rated_low),
         ),
         "actual_capacity_ah": decode_capacity_ah(
-            reg_value(REG_ACTUAL_CAPACITY_HIGH),
-            reg_value(REG_ACTUAL_CAPACITY_LOW),
+            reg_value(reg_actual_high),
+            reg_value(reg_actual_low),
         ),
-        "max_charge_current_level_1": decode_max_charge_current(reg_value(REG_MAX_CHARGE_CURRENT_LEVEL_1)),
-        "max_charge_current_level_2": decode_max_charge_current(reg_value(REG_MAX_CHARGE_CURRENT_LEVEL_2)),
-        "max_discharge_current_level_1": decode_max_discharge_current(reg_value(REG_MAX_DISCHARGE_CURRENT_LEVEL_1)),
-        "max_discharge_current_level_2": decode_max_discharge_current(reg_value(REG_MAX_DISCHARGE_CURRENT_LEVEL_2)),
+        "max_charge_current_level_1": decode_max_charge_current(reg_value(reg_chg_l1)),
+        "max_charge_current_level_2": decode_max_charge_current(reg_value(reg_chg_l2)),
+        "max_discharge_current_level_1": decode_max_discharge_current(reg_value(reg_dsg_l1)),
+        "max_discharge_current_level_2": decode_max_discharge_current(reg_value(reg_dsg_l2)),
     }
+
+
+def _write_single_with_fallback(offset_register: int, base_register: int, value: int) -> Tuple[bool, Optional[int]]:
+    if modbus is None:
+        return False, None
+
+    candidates = _register_candidates(offset_register, base_register)
+    first_allowed: Optional[int] = None
+    for register in candidates:
+        if register not in ALLOWED_WRITE_REGISTERS:
+            continue
+        if first_allowed is None:
+            first_allowed = register
+        if modbus.write_single_register(MODBUS_UNIT_ID, register, value):
+            _update_active_control_profile("offset" if register == offset_register else "base")
+            return True, register
+
+    return False, first_allowed
+
+
+def _write_multi_with_fallback(
+    offset_start_register: int, base_start_register: int, values: List[int]
+) -> Tuple[bool, Optional[int]]:
+    if modbus is None:
+        return False, None
+
+    candidates = _register_candidates(offset_start_register, base_start_register)
+    first_allowed: Optional[int] = None
+    for start_register in candidates:
+        if any((start_register + idx) not in ALLOWED_WRITE_REGISTERS for idx in range(len(values))):
+            continue
+        if first_allowed is None:
+            first_allowed = start_register
+        if modbus.write_multiple_registers(MODBUS_UNIT_ID, start_register, values):
+            _update_active_control_profile("offset" if start_register == offset_start_register else "base")
+            return True, start_register
+
+    return False, first_allowed
+
+
+def read_control_state() -> Optional[dict]:
+    for profile in _profile_order():
+        state = _read_control_state_for_profile(profile)
+        if state is not None:
+            _update_active_control_profile(profile)
+            return state
+    return None
 
 
 def publish_control_state(control_state: dict):
@@ -1579,91 +1704,124 @@ def handle_simple_control_command(topic: str, payload_bytes: bytes):
 
     ok = False
     function_code = "0x06"
-    multi_write = False
-    register = None
+    register: Optional[int] = None
     values: List[int] = []
-    error = None
+    error: Optional[str] = None
 
     if topic == CHARGE_MOS_SET_TOPIC:
         switch_value = parse_switch_payload(payload_bytes)
         if switch_value is None:
             error = "invalid payload for charge_mos_control (expected ON/OFF)"
         else:
-            register = REG_CHARGE_MOS_CONTROL
             values = [1 if switch_value else 0]
+            ok, register = _write_single_with_fallback(
+                REG_CHARGE_MOS_CONTROL,
+                REG_CHARGE_MOS_CONTROL_BASE,
+                values[0],
+            )
+            if register is None:
+                error = "no allowed register for charge_mos_control write"
     elif topic == DISCHARGE_MOS_SET_TOPIC:
         switch_value = parse_switch_payload(payload_bytes)
         if switch_value is None:
             error = "invalid payload for discharge_mos_control (expected ON/OFF)"
         else:
-            register = REG_DISCHARGE_MOS_CONTROL
             values = [1 if switch_value else 0]
+            ok, register = _write_single_with_fallback(
+                REG_DISCHARGE_MOS_CONTROL,
+                REG_DISCHARGE_MOS_CONTROL_BASE,
+                values[0],
+            )
+            if register is None:
+                error = "no allowed register for discharge_mos_control write"
     elif topic == RATED_CAPACITY_SET_TOPIC:
+        function_code = "0x10"
         value_ah = parse_float_payload(payload_bytes)
         words = encode_capacity_words(value_ah) if value_ah is not None else None
         if words is None:
             error = "invalid payload for rated_capacity_ah (expected Ah >= 0)"
         else:
-            function_code = "0x10"
-            multi_write = True
-            register = REG_RATED_CAPACITY_HIGH
             values = words
+            ok, register = _write_multi_with_fallback(
+                REG_RATED_CAPACITY_HIGH,
+                REG_RATED_CAPACITY_HIGH_BASE,
+                values,
+            )
+            if register is None:
+                error = "no allowed register for rated_capacity_ah write"
     elif topic == ACTUAL_CAPACITY_SET_TOPIC:
+        function_code = "0x10"
         value_ah = parse_float_payload(payload_bytes)
         words = encode_capacity_words(value_ah) if value_ah is not None else None
         if words is None:
             error = "invalid payload for actual_capacity_ah (expected Ah >= 0)"
         else:
-            function_code = "0x10"
-            multi_write = True
-            register = REG_ACTUAL_CAPACITY_HIGH
             values = words
+            ok, register = _write_multi_with_fallback(
+                REG_ACTUAL_CAPACITY_HIGH,
+                REG_ACTUAL_CAPACITY_HIGH_BASE,
+                values,
+            )
+            if register is None:
+                error = "no allowed register for actual_capacity_ah write"
     elif topic == MAX_CHARGE_CURRENT_LEVEL_1_SET_TOPIC:
         value_a = parse_float_payload(payload_bytes)
         raw = encode_max_charge_current(value_a) if value_a is not None else None
         if raw is None:
             error = "invalid payload for max_charge_current_level_1 (expected A between 0.1 and 3000)"
         else:
-            register = REG_MAX_CHARGE_CURRENT_LEVEL_1
             values = [raw]
+            ok, register = _write_single_with_fallback(
+                REG_MAX_CHARGE_CURRENT_LEVEL_1,
+                REG_MAX_CHARGE_CURRENT_LEVEL_1_BASE,
+                raw,
+            )
+            if register is None:
+                error = "no allowed register for max_charge_current_level_1 write"
     elif topic == MAX_CHARGE_CURRENT_LEVEL_2_SET_TOPIC:
         value_a = parse_float_payload(payload_bytes)
         raw = encode_max_charge_current(value_a) if value_a is not None else None
         if raw is None:
             error = "invalid payload for max_charge_current_level_2 (expected A between 0.1 and 3000)"
         else:
-            register = REG_MAX_CHARGE_CURRENT_LEVEL_2
             values = [raw]
+            ok, register = _write_single_with_fallback(
+                REG_MAX_CHARGE_CURRENT_LEVEL_2,
+                REG_MAX_CHARGE_CURRENT_LEVEL_2_BASE,
+                raw,
+            )
+            if register is None:
+                error = "no allowed register for max_charge_current_level_2 write"
     elif topic == MAX_DISCHARGE_CURRENT_LEVEL_1_SET_TOPIC:
         value_a = parse_float_payload(payload_bytes)
         raw = encode_max_discharge_current(value_a) if value_a is not None else None
         if raw is None:
             error = "invalid payload for max_discharge_current_level_1 (expected A between 0.1 and 3000)"
         else:
-            register = REG_MAX_DISCHARGE_CURRENT_LEVEL_1
             values = [raw]
+            ok, register = _write_single_with_fallback(
+                REG_MAX_DISCHARGE_CURRENT_LEVEL_1,
+                REG_MAX_DISCHARGE_CURRENT_LEVEL_1_BASE,
+                raw,
+            )
+            if register is None:
+                error = "no allowed register for max_discharge_current_level_1 write"
     elif topic == MAX_DISCHARGE_CURRENT_LEVEL_2_SET_TOPIC:
         value_a = parse_float_payload(payload_bytes)
         raw = encode_max_discharge_current(value_a) if value_a is not None else None
         if raw is None:
             error = "invalid payload for max_discharge_current_level_2 (expected A between 0.1 and 3000)"
         else:
-            register = REG_MAX_DISCHARGE_CURRENT_LEVEL_2
             values = [raw]
+            ok, register = _write_single_with_fallback(
+                REG_MAX_DISCHARGE_CURRENT_LEVEL_2,
+                REG_MAX_DISCHARGE_CURRENT_LEVEL_2_BASE,
+                raw,
+            )
+            if register is None:
+                error = "no allowed register for max_discharge_current_level_2 write"
     else:
         return
-
-    if error is None and register is not None:
-        for offset in range(len(values)):
-            if (register + offset) not in ALLOWED_WRITE_REGISTERS:
-                error = f"register {register + offset} is not allowed for writes"
-                ok = False
-                break
-        if error is None:
-            if multi_write:
-                ok = modbus.write_multiple_registers(MODBUS_UNIT_ID, register, values)
-            else:
-                ok = modbus.write_single_register(MODBUS_UNIT_ID, register, values[0])
 
     response: Dict[str, Any] = {
         "ok": ok,

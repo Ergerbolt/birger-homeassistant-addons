@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.21
+- Fixed write handling for firmware variants with different parameter register offsets.
+- Added automatic fallback between base registers and `+256` offset registers for:
+  - MOS control
+  - Rated/actual capacity
+  - Max charge/discharge current level 1/2
+- Expanded default write allowlist to include both register variants.
+
 ## 1.1.20
 - Added Home Assistant MQTT control entities when `enable_write_commands=true`:
   - `Charge MOS Control` / `Discharge MOS Control` switches
