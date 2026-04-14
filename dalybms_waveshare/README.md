@@ -18,7 +18,7 @@ Hinweis: Kein Deye-Inverter-Addon. Der Wechselrichter ist hier nicht beteiligt.
 - `mqtt_user`, `mqtt_pass`: MQTT Zugangsdaten
 - `mqtt_client_id`: eindeutiger MQTT Client Name
 - `mqtt_discovery_prefix`: in der Regel `homeassistant`
-- `device`: IP/Hostname des Waveshare TCP Moduls, z. B. `10.0.0.135`
+- `device`: IP/Hostname des Waveshare TCP Moduls, z. B. `bms.local`
 - `device_id`: frei waehlbare BMS Kennung in Home Assistant
 - `cells_in_series`: Anzahl Zellen in Serie, z. B. `16`
 - `nominal_capacity_ah`: optional fuer berechnete Restladung

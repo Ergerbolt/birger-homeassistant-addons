@@ -18,11 +18,11 @@ export SOCKET_TIMEOUT=$(bashio::config 'socket_timeout')
 export DEBUG_LOG_ENABLED=$(bashio::config 'debug_logging')
 
 echo "=== Daly WNT Modbus add-on starting ==="
-echo "DEVICE=$DEVICE"
+echo "DEVICE is configured"
 echo "DEVICE_ID=$DEVICE_ID"
 echo "CELL_COUNT=$CELL_COUNT"
 echo "NOMINAL_CAPACITY_AH=$NOMINAL_CAPACITY_AH"
-echo "MQTT_SERVER=$MQTT_SERVER"
+echo "MQTT broker is configured"
 echo "MQTT_CLIENT_ID=$MQTT_CLIENT_ID"
 echo "MQTT_DISCOVERY_PREFIX=$MQTT_DISCOVERY_PREFIX"
 echo "POLL_INTERVAL_SECONDS=$POLL_INTERVAL_SECONDS"
