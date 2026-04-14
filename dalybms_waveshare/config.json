@@ -1,6 +1,6 @@
 {
   "name": "Daly WNT BMS MQTT Bridge (Waveshare RS485/TCP)",
-  "version": "1.1.17",
+  "version": "1.1.18",
   "slug": "dalybms_waveshare",
   "description": "Reads Daly WNT BMS data via Waveshare RS485-to-Ethernet converter and publishes to MQTT for Home Assistant",
   "startup": "application",
