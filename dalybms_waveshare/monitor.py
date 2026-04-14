@@ -591,43 +591,6 @@ def publish_discovery():
             device_conf,
             entity_category="diagnostic",
         ),
-        f"{STATE_TOPIC}_afe_current/config": build_sensor_discovery(
-            "AFE Current",
-            "afe_current",
-            f"{STATE_TOPIC}/state",
-            "afe_current",
-            device_conf,
-            unit="A",
-            device_class="current",
-            suggested_display_precision=1,
-            entity_category="diagnostic",
-        ),
-        f"{STATE_TOPIC}_afe_factor/config": build_sensor_discovery(
-            "AFE Factor",
-            "afe_factor",
-            f"{STATE_TOPIC}/state",
-            "afe_factor",
-            device_conf,
-            suggested_display_precision=4,
-            entity_category="diagnostic",
-        ),
-        f"{STATE_TOPIC}_afe_offset/config": build_sensor_discovery(
-            "AFE Offset",
-            "afe_offset",
-            f"{STATE_TOPIC}/state",
-            "afe_offset",
-            device_conf,
-            suggested_display_precision=1,
-            entity_category="diagnostic",
-        ),
-        f"{STATE_TOPIC}_afe_adc/config": build_sensor_discovery(
-            "AFE ADC",
-            "afe_ad",
-            f"{STATE_TOPIC}/state",
-            "afe_ad",
-            device_conf,
-            entity_category="diagnostic",
-        ),
         f"{STATE_TOPIC}_pwm_duty/config": build_sensor_discovery(
             "PWM Duty",
             "pwm_duty",
@@ -678,30 +641,6 @@ def publish_discovery():
             "load_detect",
             f"{STATE_TOPIC}/state",
             "load_detect",
-            device_conf,
-            entity_category="diagnostic",
-        ),
-        f"{STATE_TOPIC}_do_state/config": build_sensor_discovery(
-            "DO State",
-            "do_state",
-            f"{STATE_TOPIC}/state",
-            "do_state",
-            device_conf,
-            entity_category="diagnostic",
-        ),
-        f"{STATE_TOPIC}_di_state/config": build_sensor_discovery(
-            "DI State",
-            "di_state",
-            f"{STATE_TOPIC}/state",
-            "di_state",
-            device_conf,
-            entity_category="diagnostic",
-        ),
-        f"{STATE_TOPIC}_serial_port_type/config": build_sensor_discovery(
-            "Serial Port Type",
-            "serial_port_type",
-            f"{STATE_TOPIC}/state",
-            "serial_port_type",
             device_conf,
             entity_category="diagnostic",
         ),
@@ -845,15 +784,6 @@ def publish_discovery():
             entity_category="diagnostic",
             json_attributes_topic=f"{RAW_TOPIC}/state",
         ),
-        f"{MOS_TOPIC}/config": build_sensor_discovery(
-            "Status Candidate Raw",
-            "status_candidate_raw",
-            f"{MOS_TOPIC}/state",
-            "value",
-            device_conf,
-            entity_category="diagnostic",
-            json_attributes_topic=f"{MOS_TOPIC}/state",
-        ),
         f"{BINARY_BASE_TOPIC}{DEVICE_ID}_charge_mos/config": build_binary_sensor_discovery(
             "Charge MOS",
             "charge_mos_on",
@@ -939,6 +869,25 @@ def publish_discovery():
             device_class="temperature",
             suggested_display_precision=1,
         )
+
+    deprecated_discovery_topics = [
+        f"{STATE_TOPIC}_afe_current/config",
+        f"{STATE_TOPIC}_afe_factor/config",
+        f"{STATE_TOPIC}_afe_offset/config",
+        f"{STATE_TOPIC}_afe_adc/config",
+        f"{STATE_TOPIC}_do_state/config",
+        f"{STATE_TOPIC}_di_state/config",
+        f"{STATE_TOPIC}_serial_port_type/config",
+        f"{MOS_TOPIC}/config",
+    ]
+
+    # Remove deprecated entities from Home Assistant by clearing retained discovery config.
+    for topic in deprecated_discovery_topics:
+        try:
+            info = client.publish(topic, payload="", qos=0, retain=True)
+            log.debug("MQTT clear discovery topic=%s rc=%s mid=%s", topic, info.rc, info.mid)
+        except Exception:
+            log.exception("Failed to clear deprecated discovery topic=%s", topic)
 
     log.info("Publishing MQTT discovery for %d entities", len(discovery))
     for topic, payload in discovery.items():
@@ -1379,19 +1328,12 @@ def publish_candidates(block: bytes, cells_payload: Optional[dict] = None):
             "limit_current": metrics["limit_current"],
             "charge_full_time": metrics["charge_full_time"],
             "wakeup_source": metrics["wakeup_source"],
-            "afe_current": metrics["afe_current"],
-            "afe_factor": metrics["afe_factor"],
-            "afe_offset": metrics["afe_offset"],
-            "afe_ad": metrics["afe_ad"],
             "pwm_duty": metrics["pwm_duty"],
             "pwm_voltage": metrics["pwm_voltage"],
             "rtc": metrics["rtc"],
             "battery_status": metrics["battery_status"],
             "charge_detect": metrics["charge_detect"],
             "load_detect": metrics["load_detect"],
-            "do_state": metrics["do_state"],
-            "di_state": metrics["di_state"],
-            "serial_port_type": metrics["serial_port_type"],
         }
         log.debug("Parsed metrics: %s", state_payload)
         publish(f"{STATE_TOPIC}/state", state_payload)

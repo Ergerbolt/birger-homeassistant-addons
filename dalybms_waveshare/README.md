@@ -37,7 +37,7 @@ Hinweis: Kein Deye-Inverter-Addon. Der Wechselrichter ist hier nicht beteiligt.
 - Temperaturen (1..8), MOS/Board/Heat Temperaturen
 - MOS Zustaende (Charge/Discharge/Precharge/Heat/Fan)
 - Alarmdaten (`error_bytes`) und erweiterte Faults (`new_fault_bytes`)
-- Weitere Diagnosewerte wie AFE, DI/DO, Wakeup Source, Battery Status
+- Weitere Diagnosewerte wie Wakeup Source und Battery Status
 
 ## Installation
 
