@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.22
+- Improved write robustness:
+  - Retry once if a write command receives a `0x03` response frame first.
+  - Better handling for converter/gateway response quirks during write operations.
+- Improved control value prefill:
+  - Falls back to single-register reads if a range read does not return usable data.
+- Control command writes now always try both known register variants (base and `+256` offset), independent of legacy allowlist settings.
+
 ## 1.1.21
 - Fixed write handling for firmware variants with different parameter register offsets.
 - Added automatic fallback between base registers and `+256` offset registers for:

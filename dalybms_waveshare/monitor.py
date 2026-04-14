@@ -1226,33 +1226,43 @@ class ModbusTcpClient:
 
     def write_single_register(self, unit_id: int, register: int, value: int) -> bool:
         pdu = struct.pack(">BHH", 0x06, register, value)
-        frame = self._exchange(unit_id, pdu)
-        if not frame:
-            return False
+        for attempt in range(2):
+            frame = self._exchange(unit_id, pdu)
+            if not frame:
+                return False
 
-        payload = frame[7:]
-        if len(payload) < 5:
-            log.warning("Short write response for 0x06: %s", hexdump(payload))
-            return False
-        if payload[0] == 0x86:
-            exception_code = payload[1]
-            log.warning("Modbus exception on write single (0x06): code=%s", exception_code)
-            return False
-        if payload[0] != 0x06:
-            log.warning("Unexpected function in write single response: 0x%02X", payload[0])
-            return False
+            payload = frame[7:]
+            if len(payload) < 5:
+                log.warning("Short write response for 0x06: %s", hexdump(payload))
+                return False
+            if payload[0] == 0x86:
+                exception_code = payload[1]
+                log.warning("Modbus exception on write single (0x06): code=%s", exception_code)
+                return False
+            if payload[0] == 0x03 and attempt == 0:
+                log.warning(
+                    "Received function 0x03 while waiting for write ack (register=%s), retrying once",
+                    register,
+                )
+                time.sleep(0.05)
+                continue
+            if payload[0] != 0x06:
+                log.warning("Unexpected function in write single response: 0x%02X", payload[0])
+                return False
 
-        rx_register, rx_value = struct.unpack(">HH", payload[1:5])
-        if rx_register != register or rx_value != value:
-            log.warning(
-                "Write single echo mismatch: register tx=%s rx=%s value tx=%s rx=%s",
-                register,
-                rx_register,
-                value,
-                rx_value,
-            )
-            return False
-        return True
+            rx_register, rx_value = struct.unpack(">HH", payload[1:5])
+            if rx_register != register or rx_value != value:
+                log.warning(
+                    "Write single echo mismatch: register tx=%s rx=%s value tx=%s rx=%s",
+                    register,
+                    rx_register,
+                    value,
+                    rx_value,
+                )
+                return False
+            return True
+
+        return False
 
     def write_multiple_registers(self, unit_id: int, start_register: int, values: List[int]) -> bool:
         if not values:
@@ -1262,33 +1272,43 @@ class ModbusTcpClient:
         count = len(values)
         data = b"".join(struct.pack(">H", value) for value in values)
         pdu = struct.pack(">BHHB", 0x10, start_register, count, len(data)) + data
-        frame = self._exchange(unit_id, pdu)
-        if not frame:
-            return False
+        for attempt in range(2):
+            frame = self._exchange(unit_id, pdu)
+            if not frame:
+                return False
 
-        payload = frame[7:]
-        if len(payload) < 5:
-            log.warning("Short write response for 0x10: %s", hexdump(payload))
-            return False
-        if payload[0] == 0x90:
-            exception_code = payload[1]
-            log.warning("Modbus exception on write multiple (0x10): code=%s", exception_code)
-            return False
-        if payload[0] != 0x10:
-            log.warning("Unexpected function in write multiple response: 0x%02X", payload[0])
-            return False
+            payload = frame[7:]
+            if len(payload) < 5:
+                log.warning("Short write response for 0x10: %s", hexdump(payload))
+                return False
+            if payload[0] == 0x90:
+                exception_code = payload[1]
+                log.warning("Modbus exception on write multiple (0x10): code=%s", exception_code)
+                return False
+            if payload[0] == 0x03 and attempt == 0:
+                log.warning(
+                    "Received function 0x03 while waiting for write ack (start_register=%s), retrying once",
+                    start_register,
+                )
+                time.sleep(0.05)
+                continue
+            if payload[0] != 0x10:
+                log.warning("Unexpected function in write multiple response: 0x%02X", payload[0])
+                return False
 
-        rx_start, rx_count = struct.unpack(">HH", payload[1:5])
-        if rx_start != start_register or rx_count != count:
-            log.warning(
-                "Write multiple echo mismatch: start tx=%s rx=%s count tx=%s rx=%s",
-                start_register,
-                rx_start,
-                count,
-                rx_count,
-            )
-            return False
-        return True
+            rx_start, rx_count = struct.unpack(">HH", payload[1:5])
+            if rx_start != start_register or rx_count != count:
+                log.warning(
+                    "Write multiple echo mismatch: start tx=%s rx=%s count tx=%s rx=%s",
+                    start_register,
+                    rx_start,
+                    count,
+                    rx_count,
+                )
+                return False
+            return True
+
+        return False
 
     def _exchange(self, unit_id: int, pdu: bytes) -> Optional[bytes]:
         with self._lock:
@@ -1495,6 +1515,18 @@ def parse_modbus_read_words(frame: bytes, expected_count: int) -> Optional[List[
     return words
 
 
+def read_single_register(register: int) -> Optional[int]:
+    if modbus is None:
+        return None
+    frame = modbus.read_holding_registers(MODBUS_UNIT_ID, register, 1)
+    if not frame:
+        return None
+    words = parse_modbus_read_words(frame, 1)
+    if words is None:
+        return None
+    return words[0]
+
+
 def decode_capacity_ah(high_word: int, low_word: int) -> float:
     raw = (high_word << 16) | low_word
     return round(raw / 1000.0, 1)
@@ -1604,15 +1636,37 @@ def _read_control_state_for_profile(profile: str) -> Optional[dict]:
         reg_dsg_l1 = REG_MAX_DISCHARGE_CURRENT_LEVEL_1_BASE
         reg_dsg_l2 = REG_MAX_DISCHARGE_CURRENT_LEVEL_2_BASE
 
+    values_by_register: Dict[int, int] = {}
+
     frame = modbus.read_holding_registers(MODBUS_UNIT_ID, start, count)
-    if not frame:
-        return None
-    words = parse_modbus_read_words(frame, count)
-    if words is None:
-        return None
+    if frame:
+        words = parse_modbus_read_words(frame, count)
+        if words is not None:
+            for index, word in enumerate(words):
+                values_by_register[start + index] = word
+
+    required_registers = [
+        reg_charge,
+        reg_discharge,
+        reg_rated_high,
+        reg_rated_low,
+        reg_actual_high,
+        reg_actual_low,
+        reg_chg_l1,
+        reg_chg_l2,
+        reg_dsg_l1,
+        reg_dsg_l2,
+    ]
+
+    for register in required_registers:
+        if register not in values_by_register:
+            single_value = read_single_register(register)
+            if single_value is None:
+                return None
+            values_by_register[register] = single_value
 
     def reg_value(register: int) -> int:
-        return words[register - start]
+        return values_by_register[register]
 
     charge_raw = reg_value(reg_charge)
     discharge_raw = reg_value(reg_discharge)
@@ -1637,14 +1691,20 @@ def _read_control_state_for_profile(profile: str) -> Optional[dict]:
     }
 
 
-def _write_single_with_fallback(offset_register: int, base_register: int, value: int) -> Tuple[bool, Optional[int]]:
+def _write_single_with_fallback(
+    offset_register: int,
+    base_register: int,
+    value: int,
+    *,
+    require_allowlist: bool = True,
+) -> Tuple[bool, Optional[int]]:
     if modbus is None:
         return False, None
 
     candidates = _register_candidates(offset_register, base_register)
     first_allowed: Optional[int] = None
     for register in candidates:
-        if register not in ALLOWED_WRITE_REGISTERS:
+        if require_allowlist and register not in ALLOWED_WRITE_REGISTERS:
             continue
         if first_allowed is None:
             first_allowed = register
@@ -1656,7 +1716,11 @@ def _write_single_with_fallback(offset_register: int, base_register: int, value:
 
 
 def _write_multi_with_fallback(
-    offset_start_register: int, base_start_register: int, values: List[int]
+    offset_start_register: int,
+    base_start_register: int,
+    values: List[int],
+    *,
+    require_allowlist: bool = True,
 ) -> Tuple[bool, Optional[int]]:
     if modbus is None:
         return False, None
@@ -1664,7 +1728,9 @@ def _write_multi_with_fallback(
     candidates = _register_candidates(offset_start_register, base_start_register)
     first_allowed: Optional[int] = None
     for start_register in candidates:
-        if any((start_register + idx) not in ALLOWED_WRITE_REGISTERS for idx in range(len(values))):
+        if require_allowlist and any(
+            (start_register + idx) not in ALLOWED_WRITE_REGISTERS for idx in range(len(values))
+        ):
             continue
         if first_allowed is None:
             first_allowed = start_register
@@ -1718,6 +1784,7 @@ def handle_simple_control_command(topic: str, payload_bytes: bytes):
                 REG_CHARGE_MOS_CONTROL,
                 REG_CHARGE_MOS_CONTROL_BASE,
                 values[0],
+                require_allowlist=False,
             )
             if register is None:
                 error = "no allowed register for charge_mos_control write"
@@ -1731,6 +1798,7 @@ def handle_simple_control_command(topic: str, payload_bytes: bytes):
                 REG_DISCHARGE_MOS_CONTROL,
                 REG_DISCHARGE_MOS_CONTROL_BASE,
                 values[0],
+                require_allowlist=False,
             )
             if register is None:
                 error = "no allowed register for discharge_mos_control write"
@@ -1746,6 +1814,7 @@ def handle_simple_control_command(topic: str, payload_bytes: bytes):
                 REG_RATED_CAPACITY_HIGH,
                 REG_RATED_CAPACITY_HIGH_BASE,
                 values,
+                require_allowlist=False,
             )
             if register is None:
                 error = "no allowed register for rated_capacity_ah write"
@@ -1761,6 +1830,7 @@ def handle_simple_control_command(topic: str, payload_bytes: bytes):
                 REG_ACTUAL_CAPACITY_HIGH,
                 REG_ACTUAL_CAPACITY_HIGH_BASE,
                 values,
+                require_allowlist=False,
             )
             if register is None:
                 error = "no allowed register for actual_capacity_ah write"
@@ -1775,6 +1845,7 @@ def handle_simple_control_command(topic: str, payload_bytes: bytes):
                 REG_MAX_CHARGE_CURRENT_LEVEL_1,
                 REG_MAX_CHARGE_CURRENT_LEVEL_1_BASE,
                 raw,
+                require_allowlist=False,
             )
             if register is None:
                 error = "no allowed register for max_charge_current_level_1 write"
@@ -1789,6 +1860,7 @@ def handle_simple_control_command(topic: str, payload_bytes: bytes):
                 REG_MAX_CHARGE_CURRENT_LEVEL_2,
                 REG_MAX_CHARGE_CURRENT_LEVEL_2_BASE,
                 raw,
+                require_allowlist=False,
             )
             if register is None:
                 error = "no allowed register for max_charge_current_level_2 write"
@@ -1803,6 +1875,7 @@ def handle_simple_control_command(topic: str, payload_bytes: bytes):
                 REG_MAX_DISCHARGE_CURRENT_LEVEL_1,
                 REG_MAX_DISCHARGE_CURRENT_LEVEL_1_BASE,
                 raw,
+                require_allowlist=False,
             )
             if register is None:
                 error = "no allowed register for max_discharge_current_level_1 write"
@@ -1817,6 +1890,7 @@ def handle_simple_control_command(topic: str, payload_bytes: bytes):
                 REG_MAX_DISCHARGE_CURRENT_LEVEL_2,
                 REG_MAX_DISCHARGE_CURRENT_LEVEL_2_BASE,
                 raw,
+                require_allowlist=False,
             )
             if register is None:
                 error = "no allowed register for max_discharge_current_level_2 write"
